@@ -1,4 +1,8 @@
-use std::{thread, time::Duration};
+use std::{
+    io::{self, Read},
+    thread,
+    time::Duration,
+};
 
 use rusb::{
     ConfigDescriptor, Device, DeviceHandle, EndpointDescriptor, GlobalContext, InterfaceDescriptor,
@@ -6,6 +10,7 @@ use rusb::{
 };
 
 mod dusb;
+mod packet;
 mod ticables;
 
 const TI_VENDOR: u16 = 0x0451;
@@ -14,7 +19,57 @@ const TI84_PLUS_SILVER: u16 = 0xe008;
 pub struct CalcHandle {
     pub device: DeviceHandle<GlobalContext>,
     pub max_raw_packet_size: u32,
-    pub bytes_read: usize,
+    pub timeout: Duration,
+    buffer: Vec<u8>,
+    read_endpoint: u8,
+}
+
+impl CalcHandle {
+    pub fn new(device: DeviceHandle<GlobalContext>, timeout: Duration) -> anyhow::Result<Self> {
+        Ok(Self {
+            device,
+            max_raw_packet_size: 64,
+            timeout,
+            buffer: Vec::new(),
+            read_endpoint: 129,
+        })
+    }
+
+    pub fn send(&self, bytes: &[u8]) -> anyhow::Result<()> {
+        println!("Sending {} bytes...", bytes.len());
+        println!("{bytes:02x?}");
+        self.device.write_bulk(2, bytes, Duration::from_secs(5))?;
+        Ok(())
+    }
+}
+
+impl Read for CalcHandle {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        println!("Receiving {} bytes...", buf.len());
+        if buf.len() > self.buffer.len() && !self.buffer.is_empty() {
+            // TODO read more bytes
+            return Err(io::ErrorKind::Other.into());
+        }
+        if self.buffer.is_empty() {
+            self.buffer.resize(self.max_raw_packet_size as usize, 0);
+            let bytes_read =
+                match self
+                    .device
+                    .read_bulk(self.read_endpoint, &mut self.buffer, self.timeout)
+                {
+                    Ok(bytes) => bytes,
+                    Err(err) => return Err(io::Error::new(io::ErrorKind::Other, err)),
+                };
+            self.buffer.resize(bytes_read, 0);
+        }
+
+        let bytes_requested = buf.len();
+        buf.copy_from_slice(&self.buffer[0..bytes_requested]);
+        self.buffer.rotate_left(bytes_requested);
+        println!("{buf:02x?}");
+
+        Ok(bytes_requested)
+    }
 }
 
 fn find_calculator() -> anyhow::Result<Option<Device<GlobalContext>>> {
@@ -37,6 +92,7 @@ fn main() -> anyhow::Result<()> {
         calc.unwrap()
     };
     let descriptor = calculator.device_descriptor()?;
+    let active_config = calculator.active_config_descriptor()?;
     let mut handle = calculator.open()?;
     println!(
         "Product string: {}\nVersion: {}",
@@ -66,9 +122,34 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    handle.set_active_configuration(1)?;
+    let interface = active_config.interfaces().next().unwrap();
+    let max_packet_size = interface
+        .descriptors()
+        .next()
+        .unwrap()
+        .endpoint_descriptors()
+        .next()
+        .unwrap()
+        .max_packet_size();
+
+    println!("max_ps: {max_packet_size}");
+    //handle.set_active_configuration(1)?;
     handle.claim_interface(0)?;
-    handle.set_alternate_setting(0, 0)?;
+    //handle.attach_kernel_driver(0)?;
+    //handle.set_alternate_setting(0, 0)?;
+    let screenshot_request = vec![0x73, 0x6d, 0x00, 0x00];
+    let clock_request = vec![
+        0x23, 0xa2, 0x0b, 0x00, 0x00, 0x00, 0x29, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x31, 0x00,
+    ];
+    let eot = vec![0x23, 0x92, 0x00, 0x00];
+    let remote_ctrl = vec![0x23, 0x87, 0xa6, 0x00];
+    let buffer_size_req = vec![0x00, 0x00, 0x00, 0x04, 0x01, 0x00, 0x00, 0x04, 0x00];
+    // handle.write_bulk(2, &buffer_size_req, Duration::from_secs(5))?;
+
+    let mut buf = vec![0; 9];
+    //handle.read_bulk(129, &mut buf, Duration::from_secs(5))?;
+    //println!("{buf:02x?}");
     let config = calculator.config_descriptor(1)?;
     //{ 3, 1, 0, 0, 0x07d0 }
 
@@ -81,11 +162,7 @@ fn main() -> anyhow::Result<()> {
     // buf[3] = 0
     //handle.write_bulk(2, &[0, 68, 0, 0], Duration::from_secs(10))?;
 
-    let mut handle = CalcHandle {
-        device: handle,
-        max_raw_packet_size: 0,
-        bytes_read: 0,
-    };
+    let mut handle = CalcHandle::new(handle, Duration::from_secs(5))?;
     dusb::cmd_send_mode_set(&mut handle, dusb::MODE_NORMAL)?;
 
     Ok(())
