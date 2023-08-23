@@ -1,17 +1,17 @@
 use crate::{
-    packet::raw::{self, BufSizeAllocPacket, BufSizeReqPacket, RawPacket, RawPacketKind},
+    packet::{
+        raw::{
+            self, BufSizeAllocPacket, BufSizeReqPacket, FinalVirtDataPacket, RawPacket,
+            RawPacketKind, RawPacketTrait,
+        },
+        vtl::VirtualPacketKind,
+    },
     ticables, CalcHandle,
 };
 
 pub const MODE_NORMAL: ModeSet = ModeSet(3, 1, 0, 0x07d0);
 pub const DFL_BUF_SIZE: u32 = 1024;
 pub const DH_SIZE: u32 = 4 + 2;
-
-#[repr(u16)]
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum VirtualPacketKind {
-    Ping = 1,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ModeSet(u16, u16, u16, u32);
@@ -48,7 +48,9 @@ fn u32_from_slice(slice: &[u8]) -> u32 {
 }
 
 pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: ModeSet) -> anyhow::Result<()> {
-    send_buf_size_request(handle, DFL_BUF_SIZE)?;
+    let buf_size_request = BufSizeReqPacket::new(DFL_BUF_SIZE);
+    buf_size_request.send(handle)?;
+
     read_buf_size_alloc(handle)?;
     let mut packet = VirtualPacket {
         size: MODE_SET_SIZE,
@@ -58,13 +60,6 @@ pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: ModeSet) -> anyhow::Resu
     packet.data.resize((MODE_SET_SIZE + DH_SIZE) as usize, 0);
 
     send_data(handle, packet)?;
-
-    Ok(())
-}
-
-fn send_buf_size_request(handle: &CalcHandle, size: u32) -> anyhow::Result<()> {
-    let packet = BufSizeReqPacket::new(size);
-    packet.send(handle)?;
 
     Ok(())
 }
@@ -112,37 +107,12 @@ pub fn write_buf_size_alloc(handle: &mut CalcHandle, size: u32) -> anyhow::Resul
 //     Ok(raw)
 // }
 
-fn send(handle: &CalcHandle, packet: &RawPacket) -> anyhow::Result<()> {
-    let size = packet.size() as u32;
-    println!("Sending packet of size {size}...");
-    let mut buf = size.to_be_bytes().to_vec();
-    buf.push(packet.kind as u8);
-    buf.append(&mut packet.payload.clone());
-    ticables::write(handle, &buf, 0)?;
-    // handle
-    //     .device
-    //     .write_interrupt(2, &buf, Duration::from_secs(10))?;
-    Ok(())
-}
-
 pub fn send_data(handle: &mut CalcHandle, packet: VirtualPacket) -> anyhow::Result<()> {
     if packet.size <= handle.max_raw_packet_size - DH_SIZE {
         // Single packet
-        let mut raw_packet = RawPacket::new(
-            RawPacketKind::VirtDataLast,
-            vec![0; packet.data.len() + DH_SIZE as usize],
-        );
-
-        raw_packet.payload[0..4].copy_from_slice(&packet.size.to_be_bytes());
-        raw_packet.payload[4..6].copy_from_slice(&(packet.kind as u16).to_be_bytes());
-        raw_packet.payload[6..packet.data.len() + DH_SIZE as usize]
-            .copy_from_slice(&packet.data[..]);
-        for (i, byte) in packet.data.iter().enumerate() {
-            raw_packet.payload[i + DH_SIZE as usize] = *byte;
-        }
-
-        send(handle, &raw_packet)?;
-        workaround_send(handle, raw_packet, packet)?;
+        let raw_packet = FinalVirtDataPacket::new(packet.kind, packet.data.clone());
+        raw_packet.send(handle)?;
+        //workaround_send(handle, raw_packet, packet)?;
         read_acknowledge(handle)?;
     } else {
         // More than one packet, starting with header

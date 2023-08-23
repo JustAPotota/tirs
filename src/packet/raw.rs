@@ -5,6 +5,8 @@ use thiserror::Error;
 
 use crate::CalcHandle;
 
+use super::vtl::VirtualPacketKind;
+
 #[repr(u8)]
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
 pub enum RawPacketKind {
@@ -30,14 +32,17 @@ pub struct WrongPacketSize {
     pub received: u32,
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
+#[error("invalid payload received")]
+pub struct InvalidPayload;
+
+#[derive(Error, Debug)]
 pub struct UnknownPacketKindError(u8);
 impl fmt::Display for UnknownPacketKindError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "unknown raw packet kind {}", self.0)
     }
 }
-impl std::error::Error for UnknownPacketKindError {}
 
 impl TryFrom<u8> for RawPacketKind {
     type Error = UnknownPacketKindError;
@@ -72,20 +77,47 @@ impl RawPacketHeader {
     }
 }
 
-pub trait RawPacketTrait {
+pub trait RawPacketTrait: Sized {
     const KIND: RawPacketKind;
-}
+    const ID: u8;
 
-pub trait SendPacket: RawPacketTrait {
     fn payload(&self) -> Vec<u8>;
-}
+    fn is_valid(payload: &[u8]) -> bool;
+    fn from_payload(payload: &[u8]) -> anyhow::Result<Self>;
 
-impl<P> From<P> for RawPacket
-where
-    P: SendPacket,
-{
-    fn from(packet: P) -> Self {
-        Self::new(P::KIND, packet.payload())
+    fn send(&self, handle: &CalcHandle) -> anyhow::Result<()> {
+        let payload = self.payload();
+        let mut bytes = (self.payload().len() as u32).to_be_bytes().to_vec();
+        bytes.push(Self::ID);
+        bytes.extend_from_slice(&payload);
+        handle.send(&bytes)?;
+
+        println!("Sent {:?} payload", Self::KIND);
+
+        Ok(())
+    }
+
+    fn receive(handle: &mut CalcHandle) -> anyhow::Result<Self> {
+        let header = RawPacketHeader::receive(handle)?;
+        // Not checking the type yet to make sure we consume all sent bytes
+        let mut payload = vec![0; header.size as usize];
+        handle.read_exact(&mut payload)?;
+
+        if header.kind != Self::KIND {
+            return Err(WrongPacketKind {
+                expected: Self::KIND,
+                received: header.kind,
+            }
+            .into());
+        }
+
+        if !Self::is_valid(&payload) {
+            return Err(InvalidPayload.into());
+        }
+
+        println!("Received {:?} payload", Self::KIND);
+
+        Self::from_payload(&payload)
     }
 }
 
@@ -105,10 +137,6 @@ impl RawPacket {
         bytes.append(&mut self.payload.clone());
         handle.send(&bytes)?;
         Ok(())
-    }
-
-    pub fn size(&self) -> usize {
-        self.payload.len()
     }
 
     pub fn receive(handle: &mut CalcHandle) -> anyhow::Result<Self> {
@@ -132,11 +160,24 @@ pub struct BufSizeReqPacket {
 
 impl RawPacketTrait for BufSizeReqPacket {
     const KIND: RawPacketKind = RawPacketKind::BufSizeReq;
-}
+    const ID: u8 = 1;
 
-impl SendPacket for BufSizeReqPacket {
     fn payload(&self) -> Vec<u8> {
         self.size.to_be_bytes().to_vec()
+    }
+
+    fn from_payload(payload: &[u8]) -> anyhow::Result<Self> {
+        Ok(Self {
+            size: u32::from_be_bytes(
+                payload[0..4]
+                    .try_into()
+                    .expect("somehow this slice isn't 4 bytes"),
+            ),
+        })
+    }
+
+    fn is_valid(payload: &[u8]) -> bool {
+        payload.len() == 4
     }
 }
 
@@ -144,11 +185,56 @@ impl BufSizeReqPacket {
     pub fn new(size: u32) -> Self {
         Self { size }
     }
+}
 
-    pub fn send(&self, handle: &CalcHandle) -> anyhow::Result<()> {
-        let packet = RawPacket::new(RawPacketKind::BufSizeReq, self.size.to_be_bytes().to_vec());
-        packet.send(handle)?;
-        Ok(())
+#[derive(Debug)]
+pub struct FinalVirtDataPacket {
+    pub packet_kind: VirtualPacketKind,
+    pub virtual_payload: Vec<u8>,
+}
+
+impl RawPacketTrait for FinalVirtDataPacket {
+    const KIND: RawPacketKind = RawPacketKind::VirtDataLast;
+    const ID: u8 = 4;
+
+    fn payload(&self) -> Vec<u8> {
+        let mut payload = (self.virtual_payload.len() as u32).to_be_bytes().to_vec();
+        payload.extend_from_slice(&(self.packet_kind as u16).to_be_bytes());
+        payload.extend_from_slice(&self.virtual_payload);
+
+        payload
+    }
+
+    fn from_payload(payload: &[u8]) -> anyhow::Result<Self> {
+        let size = u32::from_be_bytes(
+            payload[0..4]
+                .try_into()
+                .expect("somehow this slice isn't 4 bytes"),
+        );
+        let kind = VirtualPacketKind::try_from(u16::from_be_bytes(
+            payload[4..6]
+                .try_into()
+                .expect("somehow this slice isn't 2 bytes"),
+        ))?;
+        let payload = payload[6..6 + size as usize].to_vec();
+
+        Ok(Self {
+            packet_kind: kind,
+            virtual_payload: payload,
+        })
+    }
+
+    fn is_valid(payload: &[u8]) -> bool {
+        payload.len() >= 6
+    }
+}
+
+impl FinalVirtDataPacket {
+    pub fn new(packet_kind: VirtualPacketKind, virtual_payload: Vec<u8>) -> Self {
+        Self {
+            virtual_payload,
+            packet_kind,
+        }
     }
 }
 
@@ -157,32 +243,32 @@ pub struct BufSizeAllocPacket {
     pub size: u32,
 }
 
-impl BufSizeAllocPacket {
-    pub fn receive(handle: &mut CalcHandle) -> anyhow::Result<Self> {
-        let header = RawPacketHeader::receive(handle)?;
-        if header.kind != RawPacketKind::BufSizeAlloc {
-            return Err(WrongPacketKind {
-                expected: RawPacketKind::BufSizeAlloc,
-                received: header.kind,
-            }
-            .into());
-        }
-        if header.size != 4 {
-            return Err(WrongPacketSize {
-                expected: 4,
-                received: header.size,
-            }
-            .into());
-        }
-        let mut buf = [0; 4];
-        handle.read_exact(&mut buf)?;
-        let mut size = u32::from_be_bytes(buf);
+impl RawPacketTrait for BufSizeAllocPacket {
+    const KIND: RawPacketKind = RawPacketKind::BufSizeAlloc;
+    const ID: u8 = 2;
+
+    fn payload(&self) -> Vec<u8> {
+        self.size.to_be_bytes().to_vec()
+    }
+
+    fn from_payload(payload: &[u8]) -> anyhow::Result<Self> {
+        let mut size = u32::from_be_bytes(
+            payload[0..4]
+                .try_into()
+                .expect("somehow this slice isn't 4 bytes"),
+        );
+
         if size > 1018 {
             println!(
                 "The 83PCE/84+CE allocate more than they support. Clamping buffer size to 1018"
             );
             size = 1018;
         }
+
         Ok(Self { size })
+    }
+
+    fn is_valid(payload: &[u8]) -> bool {
+        payload.len() == 4
     }
 }

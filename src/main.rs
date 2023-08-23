@@ -23,6 +23,7 @@ pub struct CalcHandle {
     pub timeout: Duration,
     buffer: Vec<u8>,
     read_endpoint: u8,
+    pub debug_transfer: bool,
 }
 
 impl CalcHandle {
@@ -33,12 +34,16 @@ impl CalcHandle {
             timeout,
             buffer: Vec::new(),
             read_endpoint: 129,
+            debug_transfer: false,
         })
     }
 
     pub fn send(&self, bytes: &[u8]) -> anyhow::Result<()> {
-        println!("Sending {} bytes...", bytes.len());
-        println!("{bytes:02x?}");
+        if self.debug_transfer {
+            println!("Sending {} bytes...", bytes.len());
+            println!("{bytes:02x?}");
+        }
+
         self.device.write_bulk(2, bytes, Duration::from_secs(5))?;
         Ok(())
     }
@@ -46,7 +51,10 @@ impl CalcHandle {
 
 impl Read for CalcHandle {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        println!("Receiving {} bytes...", buf.len());
+        if self.debug_transfer {
+            println!("Receiving {} bytes...", buf.len());
+        }
+
         if buf.len() > self.buffer.len() && !self.buffer.is_empty() {
             // TODO read more bytes
             return Err(io::ErrorKind::Other.into());
@@ -69,7 +77,10 @@ impl Read for CalcHandle {
 
         buf.copy_from_slice(left);
         self.buffer = right.to_owned();
-        println!("{buf:02x?}");
+
+        if self.debug_transfer {
+            println!("{buf:02x?}");
+        }
 
         Ok(bytes_requested)
     }
