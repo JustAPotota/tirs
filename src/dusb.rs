@@ -6,7 +6,7 @@ use crate::{
         },
         vtl::VirtualPacketKind,
     },
-    ticables, CalcHandle,
+    CalcHandle,
 };
 
 pub const MODE_NORMAL: ModeSet = ModeSet(3, 1, 0, 0x07d0);
@@ -84,29 +84,6 @@ pub fn write_buf_size_alloc(handle: &mut CalcHandle, size: u32) -> anyhow::Resul
     Ok(())
 }
 
-// pub fn virtual_packet_new_ex<T: UsbContext>(
-//     handle: &DeviceHandle<T>,
-//     size: u32,
-//     kind: VirtualPacketKind,
-//     data: &[u8],
-// ) -> VirtualPacket {
-
-// }
-
-// pub fn read(handle: &mut CalcHandle) -> anyhow::Result<RawPacket> {
-//     // Read header
-//     let mut buf = [0; 5];
-//     crate::ticables::cable_read(handle, &mut buf, 5)?;
-
-//     let size = u32::from_be_bytes(*slice_to_array(&buf[..4]));
-//     let mut packet = RawPacket::new(buf[4].try_into().unwrap(), vec![0; size as usize]);
-
-//     // Read payload
-//     crate::ticables::cable_read(handle, &mut packet.data, size as usize)?;
-
-//     Ok(raw)
-// }
-
 pub fn send_data(handle: &mut CalcHandle, packet: VirtualPacket) -> anyhow::Result<()> {
     if packet.size <= handle.max_raw_packet_size - DH_SIZE {
         // Single packet
@@ -153,7 +130,7 @@ pub fn send_data(handle: &mut CalcHandle, packet: VirtualPacket) -> anyhow::Resu
             RawPacketKind::VirtDataLast,
             packet.data[offset..offset + remaining_data_len as usize].to_owned(),
         );
-        offset += remaining_data_len as usize;
+        //offset += remaining_data_len as usize;
 
         last_packet.send(handle)?;
         // maybe workaround_send()
@@ -162,30 +139,30 @@ pub fn send_data(handle: &mut CalcHandle, packet: VirtualPacket) -> anyhow::Resu
     Ok(())
 }
 
-fn workaround_send(
-    handle: &CalcHandle,
-    raw_packet: RawPacket,
-    virtual_packet: VirtualPacket,
-) -> anyhow::Result<()> {
-    let buf = vec![0; 64];
+// fn workaround_send(
+//     handle: &CalcHandle,
+//     raw_packet: RawPacket,
+//     virtual_packet: VirtualPacket,
+// ) -> anyhow::Result<()> {
+//     let buf = vec![0; 64];
 
-    if true
-    /*handle.model == TI84PCE_USB*/
-    {
-        if raw_packet.kind == RawPacketKind::VirtDataLast
-            && ((raw_packet.payload.len() + 5) % 64) == 0
-        {
-            println!(
-                "Triggering an extra bulk write\n\tvirtual size: {}\t raw size: {}",
-                virtual_packet.size,
-                raw_packet.payload.len()
-            );
-            ticables::write(handle, &buf, 0)?;
-        }
-    }
+//     if true
+//     /*handle.model == TI84PCE_USB*/
+//     {
+//         if raw_packet.kind == RawPacketKind::VirtDataLast
+//             && ((raw_packet.payload.len() + 5) % 64) == 0
+//         {
+//             println!(
+//                 "Triggering an extra bulk write\n\tvirtual size: {}\t raw size: {}",
+//                 virtual_packet.size,
+//                 raw_packet.payload.len()
+//             );
+//             ticables::write(handle, &buf, 0)?;
+//         }
+//     }
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 pub fn read_acknowledge(handle: &mut CalcHandle) -> anyhow::Result<()> {
     let mut packet = RawPacket::receive(handle)?;
