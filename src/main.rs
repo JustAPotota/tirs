@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     io::{self, Read},
     thread,
     time::Duration,
@@ -60,12 +61,14 @@ impl Read for CalcHandle {
                     Ok(bytes) => bytes,
                     Err(err) => return Err(io::Error::new(io::ErrorKind::Other, err)),
                 };
-            self.buffer.resize(bytes_read, 0);
+            self.buffer.truncate(bytes_read);
         }
 
         let bytes_requested = buf.len();
-        buf.copy_from_slice(&self.buffer[0..bytes_requested]);
-        self.buffer.rotate_left(bytes_requested);
+        let (left, right) = self.buffer.split_at(bytes_requested);
+
+        buf.copy_from_slice(left);
+        self.buffer = right.to_owned();
         println!("{buf:02x?}");
 
         Ok(bytes_requested)

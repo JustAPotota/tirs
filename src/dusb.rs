@@ -1,9 +1,9 @@
 use crate::{
-    packet::raw::{self, BufSizeAllocPacket, RawPacket, RawPacketKind},
+    packet::raw::{self, BufSizeAllocPacket, BufSizeReqPacket, RawPacket, RawPacketKind},
     ticables, CalcHandle,
 };
 
-pub const MODE_NORMAL: ModeSet = ModeSet(3, 1, 0, 0, 0x07d0);
+pub const MODE_NORMAL: ModeSet = ModeSet(3, 1, 0, 0x07d0);
 pub const DFL_BUF_SIZE: u32 = 1024;
 pub const DH_SIZE: u32 = 4 + 2;
 
@@ -14,7 +14,7 @@ pub enum VirtualPacketKind {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ModeSet(u16, u16, u16, u16, u16);
+pub struct ModeSet(u16, u16, u16, u32);
 const MODE_SET_SIZE: u32 = std::mem::size_of::<ModeSet>() as u32;
 
 #[derive(Debug, Clone)]
@@ -26,29 +26,19 @@ pub struct VirtualPacket {
 
 impl From<ModeSet> for [u8; 10] {
     fn from(value: ModeSet) -> Self {
-        [
-            value.0.to_be_bytes(),
-            value.1.to_be_bytes(),
-            value.2.to_be_bytes(),
-            value.3.to_be_bytes(),
-            value.4.to_be_bytes(),
-        ]
-        .concat()
-        .try_into()
-        .unwrap()
+        let mut bytes = [0; 10];
+        bytes[0..2].copy_from_slice(&value.0.to_be_bytes());
+        bytes[2..4].copy_from_slice(&value.1.to_be_bytes());
+        bytes[4..6].copy_from_slice(&value.2.to_be_bytes());
+        bytes[6..10].copy_from_slice(&value.3.to_be_bytes());
+        bytes
     }
 }
 
 impl From<ModeSet> for Vec<u8> {
     fn from(value: ModeSet) -> Self {
-        [
-            value.0.to_be_bytes(),
-            value.1.to_be_bytes(),
-            value.2.to_be_bytes(),
-            value.3.to_be_bytes(),
-            value.4.to_be_bytes(),
-        ]
-        .concat()
+        let mode: [u8; 10] = value.into();
+        mode.to_vec()
     }
 }
 
@@ -73,7 +63,7 @@ pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: ModeSet) -> anyhow::Resu
 }
 
 fn send_buf_size_request(handle: &CalcHandle, size: u32) -> anyhow::Result<()> {
-    let packet = RawPacket::new(RawPacketKind::BufSizeReq, size.to_be_bytes().to_vec());
+    let packet = BufSizeReqPacket::new(size);
     packet.send(handle)?;
 
     Ok(())

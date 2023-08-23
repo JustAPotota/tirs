@@ -72,6 +72,23 @@ impl RawPacketHeader {
     }
 }
 
+pub trait RawPacketTrait {
+    const KIND: RawPacketKind;
+}
+
+pub trait SendPacket: RawPacketTrait {
+    fn payload(&self) -> Vec<u8>;
+}
+
+impl<P> From<P> for RawPacket
+where
+    P: SendPacket,
+{
+    fn from(packet: P) -> Self {
+        Self::new(P::KIND, packet.payload())
+    }
+}
+
 pub struct RawPacket {
     pub kind: RawPacketKind,
     pub payload: Vec<u8>,
@@ -108,6 +125,34 @@ impl RawPacket {
     }
 }
 
+#[derive(Debug)]
+pub struct BufSizeReqPacket {
+    pub size: u32,
+}
+
+impl RawPacketTrait for BufSizeReqPacket {
+    const KIND: RawPacketKind = RawPacketKind::BufSizeReq;
+}
+
+impl SendPacket for BufSizeReqPacket {
+    fn payload(&self) -> Vec<u8> {
+        self.size.to_be_bytes().to_vec()
+    }
+}
+
+impl BufSizeReqPacket {
+    pub fn new(size: u32) -> Self {
+        Self { size }
+    }
+
+    pub fn send(&self, handle: &CalcHandle) -> anyhow::Result<()> {
+        let packet = RawPacket::new(RawPacketKind::BufSizeReq, self.size.to_be_bytes().to_vec());
+        packet.send(handle)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
 pub struct BufSizeAllocPacket {
     pub size: u32,
 }
