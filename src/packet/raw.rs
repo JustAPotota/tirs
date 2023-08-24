@@ -3,7 +3,10 @@ use std::io::Read;
 
 use thiserror::Error;
 
-use crate::CalcHandle;
+use crate::{
+    util::{u16_from_bytes, u32_from_bytes},
+    CalcHandle,
+};
 
 use super::vtl::VirtualPacketKind;
 
@@ -168,11 +171,7 @@ impl RawPacketTrait for BufSizeReqPacket {
 
     fn from_payload(payload: &[u8]) -> anyhow::Result<Self> {
         Ok(Self {
-            size: u32::from_be_bytes(
-                payload[0..4]
-                    .try_into()
-                    .expect("somehow this slice isn't 4 bytes"),
-            ),
+            size: u32_from_bytes(&payload[0..4]),
         })
     }
 
@@ -206,16 +205,8 @@ impl RawPacketTrait for FinalVirtDataPacket {
     }
 
     fn from_payload(payload: &[u8]) -> anyhow::Result<Self> {
-        let size = u32::from_be_bytes(
-            payload[0..4]
-                .try_into()
-                .expect("somehow this slice isn't 4 bytes"),
-        );
-        let kind = VirtualPacketKind::try_from(u16::from_be_bytes(
-            payload[4..6]
-                .try_into()
-                .expect("somehow this slice isn't 2 bytes"),
-        ))?;
+        let size = u32_from_bytes(&payload[0..4]);
+        let kind = VirtualPacketKind::try_from(u16_from_bytes(&payload[4..6]))?;
         let payload = payload[6..6 + size as usize].to_vec();
 
         Ok(Self {
@@ -252,11 +243,7 @@ impl RawPacketTrait for BufSizeAllocPacket {
     }
 
     fn from_payload(payload: &[u8]) -> anyhow::Result<Self> {
-        let mut size = u32::from_be_bytes(
-            payload[0..4]
-                .try_into()
-                .expect("somehow this slice isn't 4 bytes"),
-        );
+        let mut size = u32_from_bytes(&payload[0..4]);
 
         if size > 1018 {
             println!(
@@ -270,5 +257,11 @@ impl RawPacketTrait for BufSizeAllocPacket {
 
     fn is_valid(payload: &[u8]) -> bool {
         payload.len() == 4
+    }
+}
+
+impl BufSizeAllocPacket {
+    pub fn new(size: u32) -> Self {
+        Self { size }
     }
 }

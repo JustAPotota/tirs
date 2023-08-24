@@ -1,11 +1,12 @@
 use crate::{
     packet::{
         raw::{
-            self, BufSizeAllocPacket, BufSizeReqPacket, FinalVirtDataPacket, RawPacket,
-            RawPacketKind, RawPacketTrait,
+            BufSizeAllocPacket, BufSizeReqPacket, FinalVirtDataPacket, RawPacket, RawPacketKind,
+            RawPacketTrait,
         },
-        vtl::VirtualPacketKind,
+        vtl::{VirtualPacket, VirtualPacketKind},
     },
+    util::u32_from_bytes,
     CalcHandle,
 };
 
@@ -16,13 +17,6 @@ pub const DH_SIZE: u32 = 4 + 2;
 #[derive(Debug, Clone, Copy)]
 pub struct ModeSet(u16, u16, u16, u32);
 const MODE_SET_SIZE: u32 = std::mem::size_of::<ModeSet>() as u32;
-
-#[derive(Debug, Clone)]
-pub struct VirtualPacket {
-    pub size: u32,
-    pub kind: VirtualPacketKind,
-    pub data: Vec<u8>,
-}
 
 impl From<ModeSet> for [u8; 10] {
     fn from(value: ModeSet) -> Self {
@@ -40,11 +34,6 @@ impl From<ModeSet> for Vec<u8> {
         let mode: [u8; 10] = value.into();
         mode.to_vec()
     }
-}
-
-fn u32_from_slice(slice: &[u8]) -> u32 {
-    let array: [u8; 4] = slice.try_into().unwrap();
-    u32::from_be_bytes(array)
 }
 
 pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: ModeSet) -> anyhow::Result<()> {
@@ -73,10 +62,7 @@ pub fn read_buf_size_alloc(handle: &mut CalcHandle) -> anyhow::Result<u32> {
 }
 
 pub fn write_buf_size_alloc(handle: &mut CalcHandle, size: u32) -> anyhow::Result<()> {
-    let packet = raw::RawPacket::new(
-        raw::RawPacketKind::BufSizeAlloc,
-        size.to_be_bytes().to_vec(),
-    );
+    let packet = BufSizeAllocPacket::new(size);
     packet.send(handle)?;
 
     handle.max_raw_packet_size = size;
@@ -176,7 +162,7 @@ pub fn read_acknowledge(handle: &mut CalcHandle) -> anyhow::Result<()> {
         if packet_size != 4 {
             println!("Invalid packet");
         }
-        let size = u32_from_slice(&packet.payload[0..4]);
+        let size = u32_from_bytes(&packet.payload[0..4]);
         println!("  TI->PC:  Buffer Size Request ({size} bytes)");
 
         write_buf_size_alloc(handle, size)?;

@@ -1,13 +1,14 @@
 use std::{
     io::{self, Read},
-    thread,
     time::Duration,
 };
 
+use anyhow::Context;
 use rusb::{Device, DeviceHandle, GlobalContext};
 
 mod dusb;
 mod packet;
+mod util;
 
 const TI_VENDOR: u16 = 0x0451;
 const TI84_PLUS_SILVER: u16 = 0xe008;
@@ -89,15 +90,9 @@ fn find_calculator() -> anyhow::Result<Option<Device<GlobalContext>>> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let calculator = {
-        let mut calc = find_calculator()?;
-        while calc.is_none() {
-            thread::sleep(Duration::from_secs_f64(0.5));
-            calc = find_calculator()?;
-            println!("No calc");
-        }
-        calc.unwrap()
-    };
+    let calculator = find_calculator()?
+        .with_context(|| "No calculator found")
+        .unwrap();
     let descriptor = calculator.device_descriptor()?;
     let active_config = calculator.active_config_descriptor()?;
     let mut handle = calculator.open()?;

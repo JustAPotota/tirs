@@ -25,3 +25,10 @@ impl TryFrom<u16> for VirtualPacketKind {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct VirtualPacket {
+    pub size: u32,
+    pub kind: VirtualPacketKind,
+    pub data: Vec<u8>,
+}
