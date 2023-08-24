@@ -84,6 +84,7 @@ impl VirtualPacket {
     }
 
     pub fn send(self, handle: &mut CalcHandle) -> anyhow::Result<()> {
+        println!("PC->TI: Sending virtual packet {:?}", self.kind);
         let packets = self.split(handle.max_raw_packet_size);
         for packet in packets {
             packet.send(handle)?;
@@ -91,5 +92,9 @@ impl VirtualPacket {
         }
 
         Ok(())
+    }
+
+    pub fn receive(handle: &CalcHandle) -> anyhow::Result<Self> {
+        todo!()
     }
 }

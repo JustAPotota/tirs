@@ -1,9 +1,6 @@
 use crate::{
     packet::{
-        raw::{
-            BufSizeAllocPacket, FinalVirtDataPacket, InvalidPayload, RawPacket, RawPacketKind,
-            RawPacketTrait, RawPackets, WrongPacketKind,
-        },
+        raw::{RawPacketKind, RawPackets, WrongPacketKind},
         vtl::{VirtualPacket, VirtualPacketKind},
     },
     CalcHandle,
@@ -44,14 +41,6 @@ pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: ModeSet) -> anyhow::Resu
         payload: mode.into(),
     };
     packet.send(handle)?;
-    // let mut packet = VirtualPacket {
-    //     size: MODE_SET_SIZE,
-    //     kind: VirtualPacketKind::Ping,
-    //     payload: mode.into(),
-    // };
-    // packet.payload.resize((MODE_SET_SIZE + DH_SIZE) as usize, 0);
-
-    // send_data(handle, packet)?;
 
     Ok(())
 }
@@ -59,8 +48,14 @@ pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: ModeSet) -> anyhow::Resu
 pub fn read_buf_size_alloc(handle: &mut CalcHandle) -> anyhow::Result<u32> {
     let packet = RawPackets::receive_exact(RawPacketKind::BufSizeAlloc, handle)?;
     match packet {
-        RawPackets::RespondBufSize(size) => {
-            println!("Device responded with size {size}");
+        RawPackets::RespondBufSize(mut size) => {
+            println!("TI->PC: Responded with buffer size {size}");
+            if size > 1018 {
+                println!(
+                    "[The 83PCE/84+CE allocate more than they support. Clamping buffer size to 1018]"
+                );
+                size = 1018;
+            };
             handle.max_raw_packet_size = size;
             Ok(size)
         }
