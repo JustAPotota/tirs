@@ -1,12 +1,11 @@
 use crate::{
     packet::{
         raw::{
-            BufSizeAllocPacket, BufSizeReqPacket, FinalVirtDataPacket, RawPacket, RawPacketKind,
-            RawPacketTrait,
+            BufSizeAllocPacket, BufSizeReqPacket, FinalVirtDataPacket, InvalidPayload, Packet,
+            RawPacket, RawPacketKind, RawPacketTrait, WrongPacketKind,
         },
         vtl::{VirtualPacket, VirtualPacketKind},
     },
-    util::u32_from_bytes,
     CalcHandle,
 };
 
@@ -151,32 +150,24 @@ pub fn send_data(handle: &mut CalcHandle, packet: VirtualPacket) -> anyhow::Resu
 // }
 
 pub fn read_acknowledge(handle: &mut CalcHandle) -> anyhow::Result<()> {
-    let mut packet = RawPacket::receive(handle)?;
-    let packet_size = packet.payload.len();
-
-    if packet_size != 2 && packet_size != 4 {
-        println!("Invalid packet");
-    }
-
-    if packet.kind == RawPacketKind::BufSizeReq {
-        if packet_size != 4 {
-            println!("Invalid packet");
+    let packet = Packet::receive(handle)?;
+    match packet {
+        Packet::BufSizeReq { size } => {
+            println!("TI->PC: Buffer Size Request ({size} bytes)");
+            write_buf_size_alloc(handle, size)?;
+            read_acknowledge(handle)
         }
-        let size = u32_from_bytes(&packet.payload[0..4]);
-        println!("  TI->PC:  Buffer Size Request ({size} bytes)");
-
-        write_buf_size_alloc(handle, size)?;
-
-        packet = RawPacket::receive(handle)?;
+        Packet::VirtualDataAcknowledge(contents) => {
+            if contents != 0xe000 {
+                Err(InvalidPayload.into())
+            } else {
+                Ok(())
+            }
+        }
+        packet => Err(WrongPacketKind {
+            expected: RawPacketKind::VirtDataAck,
+            received: packet.kind(),
+        }
+        .into()),
     }
-
-    if packet.kind != RawPacketKind::VirtDataAck {
-        println!("Invalid packet");
-    }
-
-    if packet.payload[0] != 0xe0 && packet.payload[1] != 0x00 {
-        println!("Invalid packet");
-    }
-
-    Ok(())
 }
