@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::CalcHandle;
 
-use super::raw::{InvalidPayload, RawPacketKind, RawPackets, WrongPacketKind};
+use super::raw::{InvalidPayload, RawPacket, RawPacketKind, WrongPacketKind};
 
 #[repr(u16)]
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -38,7 +38,7 @@ pub struct VirtualPacket {
 }
 
 impl VirtualPacket {
-    pub fn split(self, max_size: u32) -> Vec<RawPackets> {
+    pub fn split(self, max_size: u32) -> Vec<RawPacket> {
         let mut bytes = (self.payload.len() as u32).to_be_bytes().to_vec();
         bytes.extend_from_slice(&(self.kind as u16).to_be_bytes());
         bytes.extend_from_slice(&self.payload);
@@ -48,9 +48,9 @@ impl VirtualPacket {
         while let Some(chunk) = chunks.next() {
             let is_last = chunks.peek().is_none();
             packets.push(if is_last {
-                RawPackets::FinalVirtData(chunk.to_vec())
+                RawPacket::FinalVirtData(chunk.to_vec())
             } else {
-                RawPackets::VirtualData(chunk.to_vec())
+                RawPacket::VirtualData(chunk.to_vec())
             });
         }
 
@@ -58,14 +58,14 @@ impl VirtualPacket {
     }
 
     fn receive_acknowledge(handle: &mut CalcHandle) -> anyhow::Result<()> {
-        let packet = RawPackets::receive(handle)?;
+        let packet = RawPacket::receive(handle)?;
         match packet {
-            RawPackets::RequestBufSize(size) => {
+            RawPacket::RequestBufSize(size) => {
                 println!("TI->PC: Buffer Size Request ({size} bytes)");
-                RawPackets::RespondBufSize(handle.max_raw_packet_size).send(handle)?;
+                RawPacket::RespondBufSize(handle.max_raw_packet_size).send(handle)?;
                 Self::receive_acknowledge(handle)?;
             }
-            RawPackets::VirtualDataAcknowledge(contents) => {
+            RawPacket::VirtualDataAcknowledge(contents) => {
                 // It should always have this, no one knows why
                 if contents != 0xe000 {
                     return Err(InvalidPayload.into());

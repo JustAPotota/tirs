@@ -1,6 +1,6 @@
 use crate::{
     packet::{
-        raw::{RawPacketKind, RawPackets, WrongPacketKind},
+        raw::{RawPacket, RawPacketKind, WrongPacketKind},
         vtl::{VirtualPacket, VirtualPacketKind},
     },
     CalcHandle,
@@ -23,7 +23,7 @@ impl From<Mode> for [u8; 10] {
 pub const DFL_BUF_SIZE: u32 = 1024;
 
 pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: Mode) -> anyhow::Result<()> {
-    RawPackets::RequestBufSize(DFL_BUF_SIZE).send(handle)?;
+    RawPacket::RequestBufSize(DFL_BUF_SIZE).send(handle)?;
 
     read_buf_size_alloc(handle)?;
     let mode: [u8; 10] = mode.into();
@@ -38,9 +38,9 @@ pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: Mode) -> anyhow::Result<
 }
 
 pub fn read_buf_size_alloc(handle: &mut CalcHandle) -> anyhow::Result<u32> {
-    let packet = RawPackets::receive_exact(RawPacketKind::BufSizeAlloc, handle)?;
+    let packet = RawPacket::receive_exact(RawPacketKind::BufSizeAlloc, handle)?;
     match packet {
-        RawPackets::RespondBufSize(mut size) => {
+        RawPacket::RespondBufSize(mut size) => {
             println!("TI->PC: Responded with buffer size {size}");
             if size > 1018 {
                 println!(

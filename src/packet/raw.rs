@@ -10,7 +10,7 @@ use crate::{
 
 #[repr(u8)]
 #[derive(Debug)]
-pub enum RawPackets {
+pub enum RawPacket {
     RequestBufSize(u32) = 1,
     RespondBufSize(u32) = 2,
     VirtualData(Vec<u8>) = 3,
@@ -18,7 +18,7 @@ pub enum RawPackets {
     VirtualDataAcknowledge(u16) = 5,
 }
 
-impl RawPackets {
+impl RawPacket {
     pub fn receive(handle: &mut CalcHandle) -> anyhow::Result<Self> {
         let mut size_buf = [0; 4];
         let mut kind_buf = [0; 1];
