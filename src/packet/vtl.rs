@@ -2,7 +2,10 @@ use core::fmt;
 
 use thiserror::Error;
 
-use crate::CalcHandle;
+use crate::{
+    util::{u16_from_bytes, u32_from_bytes},
+    CalcHandle,
+};
 
 use super::raw::{InvalidPayload, RawPacket, RawPacketKind, WrongPacketKind};
 
@@ -10,6 +13,7 @@ use super::raw::{InvalidPayload, RawPacket, RawPacketKind, WrongPacketKind};
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum VirtualPacketKind {
     SetMode = 1,
+    SetModeAcknowledge = 0x0012,
 }
 
 #[derive(Error, Debug)]
@@ -25,6 +29,7 @@ impl TryFrom<u16> for VirtualPacketKind {
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::SetMode),
+            0x12 => Ok(Self::SetModeAcknowledge),
             n => Err(UnknownPacketKindError(n)),
         }
     }
@@ -94,7 +99,41 @@ impl VirtualPacket {
         Ok(())
     }
 
-    pub fn receive(handle: &CalcHandle) -> anyhow::Result<Self> {
-        todo!()
+    fn receive_bytes(handle: &mut CalcHandle) -> anyhow::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+
+        loop {
+            match RawPacket::receive(handle)? {
+                RawPacket::VirtualData(ref payload) => bytes.extend_from_slice(payload),
+                RawPacket::FinalVirtData(ref payload) => {
+                    bytes.extend_from_slice(payload);
+                    return Ok(bytes);
+                }
+                packet => {
+                    return Err(WrongPacketKind {
+                        expected: RawPacketKind::VirtDataAck,
+                        received: packet.kind(),
+                    }
+                    .into())
+                }
+            }
+
+            RawPacket::VirtualDataAcknowledge(0xe000).send(handle)?;
+        }
+    }
+
+    pub fn receive(handle: &mut CalcHandle) -> anyhow::Result<Self> {
+        let bytes = Self::receive_bytes(handle)?;
+        let size = u32_from_bytes(&bytes[0..4]);
+        let kind = u16_from_bytes(&bytes[4..6]);
+        let payload = bytes[6..6 + size as usize].to_vec();
+
+        let kind = VirtualPacketKind::try_from(kind)?;
+
+        Ok(Self {
+            size,
+            kind,
+            payload,
+        })
     }
 }

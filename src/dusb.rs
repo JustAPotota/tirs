@@ -34,6 +34,8 @@ pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: Mode) -> anyhow::Result<
     };
     packet.send(handle)?;
 
+    println!("{:?}", VirtualPacket::receive(handle)?);
+
     Ok(())
 }
 
