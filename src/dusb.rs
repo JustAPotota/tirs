@@ -6,39 +6,31 @@ use crate::{
     CalcHandle,
 };
 
-pub const MODE_NORMAL: ModeSet = ModeSet(3, 1, 0, 0x07d0);
+#[repr(u8)]
+pub enum Mode {
+    Startup = 1,
+    Basic = 2,
+    Normal = 3,
+}
+
+impl From<Mode> for [u8; 10] {
+    fn from(value: Mode) -> Self {
+        let id = value as u8;
+        [0, id, 0, 1, 0, 0, 0, 0, 0x7d, 0xd0]
+    }
+}
+
 pub const DFL_BUF_SIZE: u32 = 1024;
 
-#[derive(Debug, Clone, Copy)]
-pub struct ModeSet(u16, u16, u16, u32);
-const MODE_SET_SIZE: u32 = std::mem::size_of::<ModeSet>() as u32;
-
-impl From<ModeSet> for [u8; 10] {
-    fn from(value: ModeSet) -> Self {
-        let mut bytes = [0; 10];
-        bytes[0..2].copy_from_slice(&value.0.to_be_bytes());
-        bytes[2..4].copy_from_slice(&value.1.to_be_bytes());
-        bytes[4..6].copy_from_slice(&value.2.to_be_bytes());
-        bytes[6..10].copy_from_slice(&value.3.to_be_bytes());
-        bytes
-    }
-}
-
-impl From<ModeSet> for Vec<u8> {
-    fn from(value: ModeSet) -> Self {
-        let mode: [u8; 10] = value.into();
-        mode.to_vec()
-    }
-}
-
-pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: ModeSet) -> anyhow::Result<()> {
+pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: Mode) -> anyhow::Result<()> {
     RawPackets::RequestBufSize(DFL_BUF_SIZE).send(handle)?;
 
     read_buf_size_alloc(handle)?;
+    let mode: [u8; 10] = mode.into();
     let packet = VirtualPacket {
-        size: MODE_SET_SIZE,
+        size: 10,
         kind: VirtualPacketKind::SetMode,
-        payload: mode.into(),
+        payload: mode.to_vec(),
     };
     packet.send(handle)?;
 

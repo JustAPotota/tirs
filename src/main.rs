@@ -118,7 +118,7 @@ fn main() -> anyhow::Result<()> {
     handle.claim_interface(0)?;
 
     let mut handle = CalcHandle::new(handle, Duration::from_secs(5))?;
-    dusb::cmd_send_mode_set(&mut handle, dusb::MODE_NORMAL)?;
+    dusb::cmd_send_mode_set(&mut handle, dusb::Mode::Normal)?;
 
     Ok(())
 }
