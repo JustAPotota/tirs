@@ -78,6 +78,8 @@ impl fmt::Display for UnknownParameterKindError {
     }
 }
 
+pub fn negotiate() {}
+
 pub fn set_mode(handle: &mut CalcHandle, mode: Mode) -> anyhow::Result<()> {
     RawPacket::RequestBufSize(DFL_BUF_SIZE).send(handle)?;
 
@@ -127,6 +129,11 @@ pub fn request_parameters(
     handle: &mut CalcHandle,
     parameters: &[ParameterKind],
 ) -> anyhow::Result<Vec<Parameter>> {
+    RawPacket::RequestBufSize(DFL_BUF_SIZE).send(handle)?;
+    read_buf_size_alloc(handle)?;
+
+    println!("PC->TI: Requesting parameters {parameters:?}");
+
     VirtualPacket::ParameterRequest(parameters.to_vec()).send(handle)?;
 
     Ok(match VirtualPacket::receive(handle)? {

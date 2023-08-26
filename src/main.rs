@@ -30,7 +30,7 @@ impl CalcHandle {
             timeout,
             buffer: Vec::new(),
             read_endpoint: 129,
-            debug_transfer: true,
+            debug_transfer: false,
         })
     }
 
@@ -102,8 +102,6 @@ fn main() -> anyhow::Result<()> {
         descriptor.device_version()
     );
 
-    println!("{}", handle.active_configuration()?);
-
     let interface = active_config.interfaces().next().unwrap();
     let max_packet_size = interface
         .descriptors()
@@ -119,7 +117,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut handle = CalcHandle::new(handle, Duration::from_secs(10))?;
     dusb::set_mode(&mut handle, dusb::Mode::Normal)?;
-    let parameters = dusb::request_parameters(&mut handle, &[dusb::ParameterKind::Clock])?;
+    let parameters = dusb::request_parameters(&mut handle, &[dusb::ParameterKind::Name])?;
     println!("{parameters:#?}");
 
     Ok(())
