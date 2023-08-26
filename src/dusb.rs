@@ -1,10 +1,14 @@
+use core::fmt;
+
 use strum::{EnumDiscriminants, FromRepr};
+use thiserror::Error;
 
 use crate::{
     packet::{
         raw::{RawPacket, RawPacketKind, WrongPacketKind},
-        vtl::VirtualPacket,
+        vtl::{self, VirtualPacket, VirtualPacketKind},
     },
+    util::i32_from_bytes,
     CalcHandle,
 };
 
@@ -57,6 +61,23 @@ pub enum Parameter {
     Clock(i32) = 0x25,
 }
 
+impl Parameter {
+    pub fn from_payload(kind: ParameterKind, payload: &[u8]) -> Self {
+        match kind {
+            ParameterKind::Name => Self::Name(String::from_utf8_lossy(payload).into_owned()),
+            ParameterKind::Clock => Self::Clock(i32_from_bytes(&payload[0..4])),
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+pub struct UnknownParameterKindError(pub u16);
+impl fmt::Display for UnknownParameterKindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown parameter kind {}", self.0)
+    }
+}
+
 pub fn set_mode(handle: &mut CalcHandle, mode: Mode) -> anyhow::Result<()> {
     RawPacket::RequestBufSize(DFL_BUF_SIZE).send(handle)?;
 
@@ -106,5 +127,16 @@ pub fn request_parameters(
     handle: &mut CalcHandle,
     parameters: &[ParameterKind],
 ) -> anyhow::Result<Vec<Parameter>> {
-    todo!()
+    VirtualPacket::ParameterRequest(parameters.to_vec()).send(handle)?;
+
+    Ok(match VirtualPacket::receive(handle)? {
+        VirtualPacket::ParameterResponse(parameters) => parameters,
+        packet => {
+            return Err(vtl::WrongPacketKind {
+                expected: VirtualPacketKind::ParameterResponse,
+                received: packet.into(),
+            }
+            .into())
+        }
+    })
 }

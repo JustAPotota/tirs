@@ -30,7 +30,7 @@ impl CalcHandle {
             timeout,
             buffer: Vec::new(),
             read_endpoint: 129,
-            debug_transfer: false,
+            debug_transfer: true,
         })
     }
 
@@ -69,10 +69,10 @@ impl Read for CalcHandle {
         }
 
         let bytes_requested = buf.len();
-        let (left, right) = self.buffer.split_at(bytes_requested);
+        let (requested, leftover) = self.buffer.split_at(bytes_requested);
 
-        buf.copy_from_slice(left);
-        self.buffer = right.to_owned();
+        buf.copy_from_slice(requested);
+        self.buffer = leftover.to_owned();
 
         if self.debug_transfer {
             println!("{buf:02x?}");
@@ -117,9 +117,10 @@ fn main() -> anyhow::Result<()> {
     println!("max_ps: {max_packet_size}");
     handle.claim_interface(0)?;
 
-    let mut handle = CalcHandle::new(handle, Duration::from_secs(5))?;
+    let mut handle = CalcHandle::new(handle, Duration::from_secs(10))?;
     dusb::set_mode(&mut handle, dusb::Mode::Normal)?;
-    //let parameters = dusb::request_parameters(&mut handle, &[dusb::ParameterKind::Name])?;
+    let parameters = dusb::request_parameters(&mut handle, &[dusb::ParameterKind::Clock])?;
+    println!("{parameters:#?}");
 
     Ok(())
 }

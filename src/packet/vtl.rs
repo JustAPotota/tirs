@@ -1,15 +1,17 @@
 use core::fmt;
+use std::io::{Cursor, Read};
 
+use byteorder::{BigEndian, ReadBytesExt};
 use strum::{EnumDiscriminants, FromRepr};
 use thiserror::Error;
 
 use crate::{
-    dusb::{Mode, Parameter, ParameterKind},
+    dusb::{Mode, Parameter, ParameterKind, UnknownParameterKindError},
     util::{u16_from_bytes, u32_from_bytes},
     CalcHandle,
 };
 
-use super::raw::{InvalidPayload, RawPacket, RawPacketKind, WrongPacketKind};
+use super::raw::{self, InvalidPayload, RawPacket, RawPacketKind};
 
 #[repr(u16)]
 #[derive(Debug, EnumDiscriminants)]
@@ -90,7 +92,7 @@ impl VirtualPacket {
                 }
             }
             packet => {
-                return Err(WrongPacketKind {
+                return Err(raw::WrongPacketKind {
                     expected: RawPacketKind::VirtDataAck,
                     received: packet.kind(),
                 }
@@ -112,7 +114,7 @@ impl VirtualPacket {
                     return Ok(bytes);
                 }
                 packet => {
-                    return Err(WrongPacketKind {
+                    return Err(raw::WrongPacketKind {
                         expected: RawPacketKind::VirtDataAck,
                         received: packet.kind(),
                     }
@@ -152,6 +154,26 @@ impl VirtualPacket {
                     .collect();
                 Self::ParameterRequest(parameters)
             }
+            VirtualPacketKind::ParameterResponse => {
+                let mut parameters = Vec::new();
+                let mut payload = Cursor::new(payload);
+                let amount = payload.read_u16::<BigEndian>()? as usize;
+                for _ in 0..amount {
+                    let id = payload.read_u16::<BigEndian>()?;
+                    let is_valid = payload.read_u8()? == 0;
+                    if !is_valid {
+                        continue;
+                    }
+                    let parameter_length = payload.read_u16::<BigEndian>()?;
+                    let mut parameter_data = vec![0; parameter_length as usize];
+                    payload.read_exact(&mut parameter_data)?;
+
+                    let kind = ParameterKind::from_repr(id).ok_or(UnknownParameterKindError(id))?;
+                    parameters.push(Parameter::from_payload(kind, &parameter_data));
+                }
+
+                Self::ParameterResponse(parameters)
+            }
             VirtualPacketKind::SetModeAcknowledge => Self::SetModeAcknowledge,
             _ => todo!(),
         })
@@ -159,9 +181,16 @@ impl VirtualPacket {
 }
 
 #[derive(Error, Debug)]
-pub struct UnknownPacketKindError(u16);
+pub struct UnknownPacketKindError(pub u16);
 impl fmt::Display for UnknownPacketKindError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "unknown virtual packet kind {}", self.0)
     }
+}
+
+#[derive(Error, Debug)]
+#[error("wrong packet kind: expected {expected:?}, received {received:?}")]
+pub struct WrongPacketKind {
+    pub expected: VirtualPacketKind,
+    pub received: VirtualPacketKind,
 }
