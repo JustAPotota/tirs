@@ -1,8 +1,10 @@
 use core::fmt;
 
+use strum::{EnumDiscriminants, FromRepr};
 use thiserror::Error;
 
 use crate::{
+    dusb::{Mode, Parameter, ParameterKind},
     util::{u16_from_bytes, u32_from_bytes},
     CalcHandle,
 };
@@ -10,43 +12,40 @@ use crate::{
 use super::raw::{InvalidPayload, RawPacket, RawPacketKind, WrongPacketKind};
 
 #[repr(u16)]
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum VirtualPacketKind {
-    SetMode = 1,
+#[derive(Debug, EnumDiscriminants)]
+#[strum_discriminants(name(VirtualPacketKind))]
+#[strum_discriminants(derive(FromRepr))]
+pub enum VirtualPacket {
+    SetMode(Mode) = 0x0001,
+    ParameterRequest(Vec<ParameterKind>) = 0x0007,
+    ParameterResponse(Vec<Parameter>) = 0x0008,
     SetModeAcknowledge = 0x0012,
 }
 
-#[derive(Error, Debug)]
-pub struct UnknownPacketKindError(u16);
-impl fmt::Display for UnknownPacketKindError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown raw packet kind {}", self.0)
-    }
-}
+impl VirtualPacket {
+    pub fn into_payload(self) -> Vec<u8> {
+        match self {
+            Self::SetMode(mode) => mode.into(),
+            Self::ParameterRequest(parameters) => {
+                let mut payload = (parameters.len() as u16).to_be_bytes().to_vec();
 
-impl TryFrom<u16> for VirtualPacketKind {
-    type Error = UnknownPacketKindError;
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            1 => Ok(Self::SetMode),
-            0x12 => Ok(Self::SetModeAcknowledge),
-            n => Err(UnknownPacketKindError(n)),
+                for parameter in parameters {
+                    payload.extend_from_slice(&(parameter as u16).to_be_bytes());
+                }
+
+                payload
+            }
+            _ => todo!(),
         }
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct VirtualPacket {
-    pub size: u32,
-    pub kind: VirtualPacketKind,
-    pub payload: Vec<u8>,
-}
+    pub fn into_raw_packets(self, max_size: u32) -> Vec<RawPacket> {
+        let kind = VirtualPacketKind::from(&self);
+        let contents = self.into_payload();
 
-impl VirtualPacket {
-    pub fn split(self, max_size: u32) -> Vec<RawPacket> {
-        let mut bytes = (self.payload.len() as u32).to_be_bytes().to_vec();
-        bytes.extend_from_slice(&(self.kind as u16).to_be_bytes());
-        bytes.extend_from_slice(&self.payload);
+        let mut bytes = (contents.len() as u32).to_be_bytes().to_vec();
+        bytes.extend_from_slice(&(kind as u16).to_be_bytes());
+        bytes.extend_from_slice(&contents);
 
         let mut packets = Vec::new();
         let mut chunks = bytes.chunks(max_size as usize).peekable();
@@ -62,13 +61,27 @@ impl VirtualPacket {
         packets
     }
 
-    fn receive_acknowledge(handle: &mut CalcHandle) -> anyhow::Result<()> {
+    pub fn send(self, handle: &mut CalcHandle) -> anyhow::Result<()> {
+        println!(
+            "PC->TI: Sending virtual packet {:?}",
+            VirtualPacketKind::from(&self)
+        );
+        let packets = self.into_raw_packets(handle.max_raw_packet_size);
+        for packet in packets {
+            packet.send(handle)?;
+            Self::wait_for_acknowledge(handle)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn wait_for_acknowledge(handle: &mut CalcHandle) -> anyhow::Result<()> {
         let packet = RawPacket::receive(handle)?;
         match packet {
             RawPacket::RequestBufSize(size) => {
                 println!("TI->PC: Buffer Size Request ({size} bytes)");
                 RawPacket::RespondBufSize(handle.max_raw_packet_size).send(handle)?;
-                Self::receive_acknowledge(handle)?;
+                Self::wait_for_acknowledge(handle)?;
             }
             RawPacket::VirtualDataAcknowledge(contents) => {
                 // It should always have this, no one knows why
@@ -83,17 +96,6 @@ impl VirtualPacket {
                 }
                 .into())
             }
-        }
-
-        Ok(())
-    }
-
-    pub fn send(self, handle: &mut CalcHandle) -> anyhow::Result<()> {
-        println!("PC->TI: Sending virtual packet {:?}", self.kind);
-        let packets = self.split(handle.max_raw_packet_size);
-        for packet in packets {
-            packet.send(handle)?;
-            Self::receive_acknowledge(handle)?;
         }
 
         Ok(())
@@ -128,12 +130,38 @@ impl VirtualPacket {
         let kind = u16_from_bytes(&bytes[4..6]);
         let payload = bytes[6..6 + size as usize].to_vec();
 
-        let kind = VirtualPacketKind::try_from(kind)?;
+        let kind = VirtualPacketKind::from_repr(kind).ok_or(UnknownPacketKindError(kind))?;
+        println!("TI->PC: Received virtual packet {kind:?}");
+        Self::from_payload(kind, &payload)
+    }
 
-        Ok(Self {
-            size,
-            kind,
-            payload,
+    pub fn from_payload(kind: VirtualPacketKind, payload: &[u8]) -> anyhow::Result<Self> {
+        Ok(match kind {
+            VirtualPacketKind::SetMode => Self::SetMode(Mode::from(&payload[0..2])),
+            VirtualPacketKind::ParameterRequest => {
+                let amount = u16_from_bytes(&payload[0..2]) as usize;
+
+                let parameters = payload
+                    .chunks_exact(2)
+                    .skip(1)
+                    .take(amount)
+                    .map(|pair| {
+                        let id = u16_from_bytes(pair);
+                        ParameterKind::from_repr(id).unwrap()
+                    })
+                    .collect();
+                Self::ParameterRequest(parameters)
+            }
+            VirtualPacketKind::SetModeAcknowledge => Self::SetModeAcknowledge,
+            _ => todo!(),
         })
+    }
+}
+
+#[derive(Error, Debug)]
+pub struct UnknownPacketKindError(u16);
+impl fmt::Display for UnknownPacketKindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown virtual packet kind {}", self.0)
     }
 }

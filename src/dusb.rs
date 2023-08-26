@@ -1,12 +1,15 @@
+use strum::{EnumDiscriminants, FromRepr};
+
 use crate::{
     packet::{
         raw::{RawPacket, RawPacketKind, WrongPacketKind},
-        vtl::{VirtualPacket, VirtualPacketKind},
+        vtl::VirtualPacket,
     },
     CalcHandle,
 };
 
 #[repr(u8)]
+#[derive(Debug, FromRepr)]
 pub enum Mode {
     Startup = 1,
     Basic = 2,
@@ -20,21 +23,55 @@ impl From<Mode> for [u8; 10] {
     }
 }
 
+impl From<Mode> for Vec<u8> {
+    fn from(value: Mode) -> Self {
+        <[u8; 10]>::from(value).to_vec()
+    }
+}
+
+impl From<&[u8]> for Mode {
+    fn from(value: &[u8]) -> Self {
+        Self::from_repr(value[1]).unwrap()
+    }
+}
+
 pub const DFL_BUF_SIZE: u32 = 1024;
 
-pub fn cmd_send_mode_set(handle: &mut CalcHandle, mode: Mode) -> anyhow::Result<()> {
+#[repr(u16)]
+pub enum VariableAttribute {
+    Size = 1,
+    Kind = 2,
+}
+
+pub struct Variable {
+    pub name: String,
+    pub attributes: Vec<VariableAttribute>,
+}
+
+#[repr(u16)]
+#[derive(Debug, FromRepr, EnumDiscriminants)]
+#[strum_discriminants(name(ParameterKind))]
+#[strum_discriminants(derive(FromRepr))]
+pub enum Parameter {
+    Name(String) = 0x02,
+    Clock(i32) = 0x25,
+}
+
+pub fn set_mode(handle: &mut CalcHandle, mode: Mode) -> anyhow::Result<()> {
     RawPacket::RequestBufSize(DFL_BUF_SIZE).send(handle)?;
 
     read_buf_size_alloc(handle)?;
-    let mode: [u8; 10] = mode.into();
-    let packet = VirtualPacket {
-        size: 10,
-        kind: VirtualPacketKind::SetMode,
-        payload: mode.to_vec(),
-    };
-    packet.send(handle)?;
-
-    println!("{:?}", VirtualPacket::receive(handle)?);
+    VirtualPacket::SetMode(mode).send(handle)?;
+    // let mode: [u8; 10] = mode.into();
+    // let packet = VirtualPacket {
+    //     size: 10,
+    //     kind: VirtualPacketKind::SetMode,
+    //     payload: mode.to_vec(),
+    // };
+    // packet.send(handle)?;
+    let packet = VirtualPacket::receive(handle)?;
+    println!("{packet:?}");
+    //println!("{:?}", VirtualPacket::receive(handle)?);
 
     Ok(())
 }
@@ -59,4 +96,15 @@ pub fn read_buf_size_alloc(handle: &mut CalcHandle) -> anyhow::Result<u32> {
         }
         .into()),
     }
+}
+
+pub fn request_directory_listing(handle: &mut CalcHandle) -> anyhow::Result<()> {
+    todo!()
+}
+
+pub fn request_parameters(
+    handle: &mut CalcHandle,
+    parameters: &[ParameterKind],
+) -> anyhow::Result<Vec<Parameter>> {
+    todo!()
 }

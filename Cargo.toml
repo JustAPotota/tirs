@@ -7,6 +7,12 @@ edition = "2021"
 
 [dependencies]
 anyhow = { version = "1.0.75", features = ["backtrace"] }
-num_enum = "0.7.0"
 rusb = "0.9.2"
 thiserror = "1.0.47"
+
+# Waiting for this branch to be merged upstream
+# https://github.com/Peternator7/strum/issues/283
+[dependencies.strum]
+git = "https://github.com/jscatena88/strum.git"
+branch = "discrim_repr_inherit"
+features = ["derive"]
