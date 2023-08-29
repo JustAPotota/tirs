@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = { version = "1.0.75", features = ["backtrace"] }
 byteorder = "1.4.3"
+image = "0.24.7"
 rusb = "0.9.2"
 thiserror = "1.0.47"
 

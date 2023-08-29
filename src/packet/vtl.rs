@@ -111,6 +111,7 @@ impl VirtualPacket {
                 RawPacket::VirtualData(ref payload) => bytes.extend_from_slice(payload),
                 RawPacket::FinalVirtData(ref payload) => {
                     bytes.extend_from_slice(payload);
+                    RawPacket::VirtualDataAcknowledge(0xe000).send(handle)?;
                     return Ok(bytes);
                 }
                 packet => {
@@ -156,17 +157,28 @@ impl VirtualPacket {
             }
             VirtualPacketKind::ParameterResponse => {
                 let mut parameters = Vec::new();
-                let mut payload = Cursor::new(payload);
-                let amount = payload.read_u16::<BigEndian>()? as usize;
+                let mut payload_cursor = Cursor::new(payload);
+                let amount = payload_cursor.read_u16::<BigEndian>()? as usize;
                 for _ in 0..amount {
-                    let id = payload.read_u16::<BigEndian>()?;
-                    let is_valid = payload.read_u8()? == 0;
+                    let id = payload_cursor.read_u16::<BigEndian>()?;
+                    let is_valid = payload_cursor.read_u8()? == 0;
                     if !is_valid {
                         continue;
                     }
-                    let parameter_length = payload.read_u16::<BigEndian>()?;
+
+                    let parameter_length = {
+                        // if the parameter is bigger than u16::MAX, the calc will set the length to 0
+                        // stupid dum hack because screenshots on some devices are huge
+                        let length = payload_cursor.read_u16::<BigEndian>()? as u32;
+                        if length == 0 {
+                            153600
+                        } else {
+                            length
+                        }
+                    };
+
                     let mut parameter_data = vec![0; parameter_length as usize];
-                    payload.read_exact(&mut parameter_data)?;
+                    payload_cursor.read_exact(&mut parameter_data)?;
 
                     let kind = ParameterKind::from_repr(id).ok_or(UnknownParameterKindError(id))?;
                     parameters.push(Parameter::from_payload(kind, &parameter_data));

@@ -1,5 +1,6 @@
 use core::fmt;
 
+use byteorder::{ByteOrder, LE};
 use strum::{EnumDiscriminants, FromRepr};
 use thiserror::Error;
 
@@ -8,7 +9,7 @@ use crate::{
         raw::{RawPacket, RawPacketKind, WrongPacketKind},
         vtl::{self, VirtualPacket, VirtualPacketKind},
     },
-    util::i32_from_bytes,
+    util::{u16_from_bytes, u32_from_bytes},
     CalcHandle,
 };
 
@@ -52,20 +53,36 @@ pub struct Variable {
     pub attributes: Vec<VariableAttribute>,
 }
 
+#[derive(Debug)]
+pub enum Screenshot {
+    Monochrome,             // 1 bit per pixel
+    Grayscale,              // 4 bits per pixel (Nspire)
+    Rgb(Box<[u16; 76800]>), // 16 bits per pixel (5 red, 6 green, 5 blue) (Nspire CX/84+CSE/83PCE/84+CE)
+}
+
 #[repr(u16)]
-#[derive(Debug, FromRepr, EnumDiscriminants)]
+#[derive(Debug, EnumDiscriminants)]
 #[strum_discriminants(name(ParameterKind))]
 #[strum_discriminants(derive(FromRepr))]
 pub enum Parameter {
     Name(String) = 0x02,
-    Clock(i32) = 0x25,
+    ScreenWidth(u16) = 0x001e,
+    ScreenHeight(u16) = 0x001f,
+    ScreenContents(Screenshot) = 0x0022,
+    Clock(u32) = 0x25,
 }
 
 impl Parameter {
     pub fn from_payload(kind: ParameterKind, payload: &[u8]) -> Self {
         match kind {
             ParameterKind::Name => Self::Name(String::from_utf8_lossy(payload).into_owned()),
-            ParameterKind::Clock => Self::Clock(i32_from_bytes(&payload[0..4])),
+            ParameterKind::ScreenWidth => Self::ScreenWidth(u16_from_bytes(&payload[0..2])),
+            ParameterKind::ScreenHeight => Self::ScreenHeight(u16_from_bytes(&payload[0..2])),
+            ParameterKind::ScreenContents => Self::ScreenContents(Screenshot::Rgb(Box::new({
+                let a: Vec<u16> = payload.chunks_exact(2).map(LE::read_u16).collect();
+                a.try_into().unwrap()
+            }))),
+            ParameterKind::Clock => Self::Clock(u32_from_bytes(&payload[0..4])),
         }
     }
 }

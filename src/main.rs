@@ -4,7 +4,10 @@ use std::{
 };
 
 use anyhow::Context;
+use image::GenericImage;
 use rusb::{Device, DeviceHandle, GlobalContext};
+
+use crate::dusb::{Parameter, ParameterKind, Screenshot};
 
 mod dusb;
 mod packet;
@@ -51,16 +54,28 @@ impl Read for CalcHandle {
             println!("Receiving {} bytes...", buf.len());
         }
 
+        // if buf.len() > self.max_raw_packet_size as usize {
+        //     for i in 0..
+        // }
+
         if buf.len() > self.buffer.len() && !self.buffer.is_empty() {
-            // TODO read more bytes
-            return Err(io::ErrorKind::Other.into());
+            let bytes_read = self.buffer.len();
+            buf[0..bytes_read].copy_from_slice(&self.buffer);
+            self.buffer.clear();
+
+            return Ok(bytes_read);
         }
+
+        if buf.len() > self.max_raw_packet_size as usize {
+            return self.read(&mut buf[0..self.max_raw_packet_size as usize]);
+        }
+
         if self.buffer.is_empty() {
-            self.buffer.resize(self.max_raw_packet_size as usize, 0);
-            let bytes_read =
-                match self
+            //self.buffer.resize(self.max_raw_packet_size as usize, 0);
+            self.buffer.resize(1024, 0);
+            let bytes_read = match self
                     .device
-                    .read_bulk(self.read_endpoint, &mut self.buffer, self.timeout)
+                    .read_bulk(self.read_endpoint, &mut self.buffer, self.timeout) // Overflow
                 {
                     Ok(bytes) => bytes,
                     Err(err) => return Err(io::Error::new(io::ErrorKind::Other, err)),
@@ -117,8 +132,45 @@ fn main() -> anyhow::Result<()> {
 
     let mut handle = CalcHandle::new(handle, Duration::from_secs(10))?;
     dusb::set_mode(&mut handle, dusb::Mode::Normal)?;
-    let parameters = dusb::request_parameters(&mut handle, &[dusb::ParameterKind::Name])?;
-    println!("{parameters:#?}");
+    let parameters = dusb::request_parameters(
+        &mut handle,
+        &[
+            ParameterKind::ScreenWidth,
+            ParameterKind::ScreenHeight,
+            ParameterKind::ScreenContents,
+        ],
+    )?;
 
+    let (mut width, mut height) = (0, 0);
+    let mut pixels = Vec::new();
+    for parameter in parameters {
+        match parameter {
+            Parameter::ScreenWidth(w) => width = w as u32,
+            Parameter::ScreenHeight(h) => height = h as u32,
+            Parameter::ScreenContents(screenshot) => match screenshot {
+                Screenshot::Rgb(p) => pixels = p.to_vec(),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    let mut img = image::RgbImage::new(width, height);
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = pixels[(y * width + x) as usize];
+            let r = (pixel & 0b11111_000000_00000) >> 11;
+            let r = r as f32 / 31.0 * 255.0;
+
+            let g = (pixel & 0b00000_111111_00000) >> 5;
+            let g = g as f32 / 63.0 * 255.0;
+
+            let b = pixel & 0b00000_000000_11111;
+            let b = b as f32 / 31.0 * 255.0;
+
+            img.put_pixel(x, y, image::Rgb([r as u8, g as u8, b as u8]));
+        }
+    }
+    img.save("screenshot.png")?;
     Ok(())
 }
