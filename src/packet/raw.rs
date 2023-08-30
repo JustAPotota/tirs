@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     util::{u16_from_bytes, u32_from_bytes},
-    CalcHandle,
+    Calculator,
 };
 
 #[repr(u8)]
@@ -19,7 +19,7 @@ pub enum RawPacket {
 }
 
 impl RawPacket {
-    pub fn receive(handle: &mut CalcHandle) -> anyhow::Result<Self> {
+    pub fn receive(handle: &mut Calculator) -> anyhow::Result<Self> {
         let mut size_buf = [0; 4];
         let mut kind_buf = [0; 1];
         handle.read_exact(&mut size_buf)?;
@@ -38,7 +38,7 @@ impl RawPacket {
         Ok(Self::from_payload(kind, payload)?)
     }
 
-    pub fn receive_exact(kind: RawPacketKind, handle: &mut CalcHandle) -> anyhow::Result<Self> {
+    pub fn receive_exact(kind: RawPacketKind, handle: &mut Calculator) -> anyhow::Result<Self> {
         let packet = Self::receive(handle)?;
         if packet.kind() != kind {
             Err(WrongPacketKind {
@@ -72,7 +72,7 @@ impl RawPacket {
         }
     }
 
-    pub fn send(self, handle: &CalcHandle) -> anyhow::Result<()> {
+    pub fn send(self, handle: &Calculator) -> anyhow::Result<()> {
         let kind = self.kind();
         let id = kind as u8;
 

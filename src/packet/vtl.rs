@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::{
     dusb::{Mode, Parameter, ParameterKind, UnknownParameterKindError},
     util::{u16_from_bytes, u32_from_bytes},
-    CalcHandle,
+    Calculator,
 };
 
 use super::raw::{self, InvalidPayload, RawPacket, RawPacketKind};
@@ -63,7 +63,7 @@ impl VirtualPacket {
         packets
     }
 
-    pub fn send(self, handle: &mut CalcHandle) -> anyhow::Result<()> {
+    pub fn send(self, handle: &mut Calculator) -> anyhow::Result<()> {
         println!(
             "PC->TI: Sending virtual packet {:?}",
             VirtualPacketKind::from(&self)
@@ -77,7 +77,7 @@ impl VirtualPacket {
         Ok(())
     }
 
-    pub fn wait_for_acknowledge(handle: &mut CalcHandle) -> anyhow::Result<()> {
+    pub fn wait_for_acknowledge(handle: &mut Calculator) -> anyhow::Result<()> {
         let packet = RawPacket::receive(handle)?;
         match packet {
             RawPacket::RequestBufSize(size) => {
@@ -103,7 +103,7 @@ impl VirtualPacket {
         Ok(())
     }
 
-    fn receive_bytes(handle: &mut CalcHandle) -> anyhow::Result<Vec<u8>> {
+    fn receive_bytes(handle: &mut Calculator) -> anyhow::Result<Vec<u8>> {
         let mut bytes = Vec::new();
 
         loop {
@@ -127,7 +127,7 @@ impl VirtualPacket {
         }
     }
 
-    pub fn receive(handle: &mut CalcHandle) -> anyhow::Result<Self> {
+    pub fn receive(handle: &mut Calculator) -> anyhow::Result<Self> {
         let bytes = Self::receive_bytes(handle)?;
         let size = u32_from_bytes(&bytes[0..4]);
         let kind = u16_from_bytes(&bytes[4..6]);
@@ -187,7 +187,6 @@ impl VirtualPacket {
                 Self::ParameterResponse(parameters)
             }
             VirtualPacketKind::SetModeAcknowledge => Self::SetModeAcknowledge,
-            _ => todo!(),
         })
     }
 }

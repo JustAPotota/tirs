@@ -5,12 +5,8 @@ use strum::{EnumDiscriminants, FromRepr};
 use thiserror::Error;
 
 use crate::{
-    packet::{
-        raw::{RawPacket, RawPacketKind, WrongPacketKind},
-        vtl::{self, VirtualPacket, VirtualPacketKind},
-    },
     util::{u16_from_bytes, u32_from_bytes},
-    CalcHandle,
+    Calculator,
 };
 
 #[repr(u8)]
@@ -39,8 +35,6 @@ impl From<&[u8]> for Mode {
         Self::from_repr(value[1]).unwrap()
     }
 }
-
-pub const DFL_BUF_SIZE: u32 = 1024;
 
 #[repr(u16)]
 pub enum VariableAttribute {
@@ -95,72 +89,6 @@ impl fmt::Display for UnknownParameterKindError {
     }
 }
 
-pub fn negotiate() {}
-
-pub fn set_mode(handle: &mut CalcHandle, mode: Mode) -> anyhow::Result<()> {
-    RawPacket::RequestBufSize(DFL_BUF_SIZE).send(handle)?;
-
-    read_buf_size_alloc(handle)?;
-    VirtualPacket::SetMode(mode).send(handle)?;
-    // let mode: [u8; 10] = mode.into();
-    // let packet = VirtualPacket {
-    //     size: 10,
-    //     kind: VirtualPacketKind::SetMode,
-    //     payload: mode.to_vec(),
-    // };
-    // packet.send(handle)?;
-    let packet = VirtualPacket::receive(handle)?;
-    println!("{packet:?}");
-    //println!("{:?}", VirtualPacket::receive(handle)?);
-
-    Ok(())
-}
-
-pub fn read_buf_size_alloc(handle: &mut CalcHandle) -> anyhow::Result<u32> {
-    let packet = RawPacket::receive_exact(RawPacketKind::BufSizeAlloc, handle)?;
-    match packet {
-        RawPacket::RespondBufSize(mut size) => {
-            println!("TI->PC: Responded with buffer size {size}");
-            if size > 1018 {
-                println!(
-                    "[The 83PCE/84+CE allocate more than they support. Clamping buffer size to 1018]"
-                );
-                size = 1018;
-            };
-            handle.max_raw_packet_size = size;
-            Ok(size)
-        }
-        packet => Err(WrongPacketKind {
-            expected: RawPacketKind::BufSizeAlloc,
-            received: packet.kind(),
-        }
-        .into()),
-    }
-}
-
-pub fn request_directory_listing(handle: &mut CalcHandle) -> anyhow::Result<()> {
+pub fn request_directory_listing(handle: &mut Calculator) -> anyhow::Result<()> {
     todo!()
-}
-
-pub fn request_parameters(
-    handle: &mut CalcHandle,
-    parameters: &[ParameterKind],
-) -> anyhow::Result<Vec<Parameter>> {
-    RawPacket::RequestBufSize(DFL_BUF_SIZE).send(handle)?;
-    read_buf_size_alloc(handle)?;
-
-    println!("PC->TI: Requesting parameters {parameters:?}");
-
-    VirtualPacket::ParameterRequest(parameters.to_vec()).send(handle)?;
-
-    Ok(match VirtualPacket::receive(handle)? {
-        VirtualPacket::ParameterResponse(parameters) => parameters,
-        packet => {
-            return Err(vtl::WrongPacketKind {
-                expected: VirtualPacketKind::ParameterResponse,
-                received: packet.into(),
-            }
-            .into())
-        }
-    })
 }

@@ -1,13 +1,19 @@
+#![allow(clippy::unusual_byte_groupings)]
+
 use std::{
     io::{self, Read},
     time::Duration,
 };
 
 use anyhow::Context;
-use image::GenericImage;
+use dusb::Mode;
+use packet::raw::{self, RawPacket, RawPacketKind};
 use rusb::{Device, DeviceHandle, GlobalContext};
 
-use crate::dusb::{Parameter, ParameterKind, Screenshot};
+use crate::{
+    dusb::{Parameter, ParameterKind, Screenshot},
+    packet::vtl::{self, VirtualPacket, VirtualPacketKind},
+};
 
 mod dusb;
 mod packet;
@@ -16,7 +22,7 @@ mod util;
 const TI_VENDOR: u16 = 0x0451;
 const TI84_PLUS_SILVER: u16 = 0xe008;
 
-pub struct CalcHandle {
+pub struct Calculator {
     pub device: DeviceHandle<GlobalContext>,
     pub max_raw_packet_size: u32,
     pub timeout: Duration,
@@ -25,16 +31,80 @@ pub struct CalcHandle {
     pub debug_transfer: bool,
 }
 
-impl CalcHandle {
+impl Calculator {
     pub fn new(device: DeviceHandle<GlobalContext>, timeout: Duration) -> anyhow::Result<Self> {
-        Ok(Self {
+        let mut calculator = Self {
             device,
-            max_raw_packet_size: 64,
+            max_raw_packet_size: 1019,
             timeout,
             buffer: Vec::new(),
             read_endpoint: 129,
             debug_transfer: false,
+        };
+
+        calculator.negotiate_packet_size(1019)?;
+
+        Ok(calculator)
+    }
+
+    pub fn negotiate_packet_size(&mut self, max: u32) -> anyhow::Result<()> {
+        RawPacket::RequestBufSize(max).send(self)?;
+        let packet = RawPacket::receive_exact(RawPacketKind::BufSizeAlloc, self)?;
+
+        match packet {
+            RawPacket::RespondBufSize(mut size) => {
+                println!("TI->PC: Responded with buffer size {size}");
+                if size > 1018 {
+                    println!(
+                    "[The 83PCE/84+CE allocate more than they support. Clamping buffer size to 1018]"
+                );
+                    size = 1018;
+                };
+                self.max_raw_packet_size = size;
+                Ok(())
+            }
+            packet => Err(raw::WrongPacketKind {
+                expected: RawPacketKind::BufSizeAlloc,
+                received: packet.kind(),
+            }
+            .into()),
+        }
+    }
+
+    pub fn request_parameters(
+        &mut self,
+        parameters: &[ParameterKind],
+    ) -> anyhow::Result<Vec<Parameter>> {
+        self.negotiate_packet_size(self.max_raw_packet_size)?;
+
+        println!("PC->TI: Requesting parameters {parameters:?}");
+
+        VirtualPacket::ParameterRequest(parameters.to_vec()).send(self)?;
+
+        Ok(match VirtualPacket::receive(self)? {
+            VirtualPacket::ParameterResponse(parameters) => parameters,
+            packet => {
+                return Err(vtl::WrongPacketKind {
+                    expected: VirtualPacketKind::ParameterResponse,
+                    received: packet.into(),
+                }
+                .into())
+            }
         })
+    }
+
+    pub fn set_mode(&mut self, mode: Mode) -> anyhow::Result<()> {
+        self.negotiate_packet_size(self.max_raw_packet_size)?;
+
+        VirtualPacket::SetMode(mode).send(self)?;
+        match VirtualPacket::receive(self)? {
+            VirtualPacket::SetModeAcknowledge => Ok(()),
+            packet => Err(vtl::WrongPacketKind {
+                expected: VirtualPacketKind::SetModeAcknowledge,
+                received: packet.into(),
+            }
+            .into()),
+        }
     }
 
     pub fn send(&self, bytes: &[u8]) -> anyhow::Result<()> {
@@ -48,15 +118,11 @@ impl CalcHandle {
     }
 }
 
-impl Read for CalcHandle {
+impl Read for Calculator {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.debug_transfer {
             println!("Receiving {} bytes...", buf.len());
         }
-
-        // if buf.len() > self.max_raw_packet_size as usize {
-        //     for i in 0..
-        // }
 
         if buf.len() > self.buffer.len() && !self.buffer.is_empty() {
             let bytes_read = self.buffer.len();
@@ -71,7 +137,6 @@ impl Read for CalcHandle {
         }
 
         if self.buffer.is_empty() {
-            //self.buffer.resize(self.max_raw_packet_size as usize, 0);
             self.buffer.resize(1024, 0);
             let bytes_read = match self
                     .device
@@ -109,7 +174,6 @@ fn main() -> anyhow::Result<()> {
         .with_context(|| "No calculator found")
         .unwrap();
     let descriptor = calculator.device_descriptor()?;
-    let active_config = calculator.active_config_descriptor()?;
     let mut handle = calculator.open()?;
     println!(
         "Product string: {}\nVersion: {}",
@@ -117,29 +181,16 @@ fn main() -> anyhow::Result<()> {
         descriptor.device_version()
     );
 
-    let interface = active_config.interfaces().next().unwrap();
-    let max_packet_size = interface
-        .descriptors()
-        .next()
-        .unwrap()
-        .endpoint_descriptors()
-        .next()
-        .unwrap()
-        .max_packet_size();
-
-    println!("max_ps: {max_packet_size}");
     handle.claim_interface(0)?;
 
-    let mut handle = CalcHandle::new(handle, Duration::from_secs(10))?;
-    dusb::set_mode(&mut handle, dusb::Mode::Normal)?;
-    let parameters = dusb::request_parameters(
-        &mut handle,
-        &[
-            ParameterKind::ScreenWidth,
-            ParameterKind::ScreenHeight,
-            ParameterKind::ScreenContents,
-        ],
-    )?;
+    let mut calculator = Calculator::new(handle, Duration::from_secs(10))?;
+    calculator.set_mode(Mode::Normal)?;
+
+    let parameters = calculator.request_parameters(&[
+        ParameterKind::ScreenWidth,
+        ParameterKind::ScreenHeight,
+        ParameterKind::ScreenContents,
+    ])?;
 
     let (mut width, mut height) = (0, 0);
     let mut pixels = Vec::new();
@@ -147,10 +198,7 @@ fn main() -> anyhow::Result<()> {
         match parameter {
             Parameter::ScreenWidth(w) => width = w as u32,
             Parameter::ScreenHeight(h) => height = h as u32,
-            Parameter::ScreenContents(screenshot) => match screenshot {
-                Screenshot::Rgb(p) => pixels = p.to_vec(),
-                _ => {}
-            },
+            Parameter::ScreenContents(Screenshot::Rgb(p)) => pixels = p.to_vec(),
             _ => {}
         }
     }
