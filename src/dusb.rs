@@ -1,13 +1,11 @@
 use core::fmt;
+use std::io;
 
-use byteorder::{ByteOrder, LE};
+use byteorder::{ByteOrder, ReadBytesExt, BE, LE};
 use strum::{EnumDiscriminants, FromRepr};
 use thiserror::Error;
 
-use crate::{
-    util::{u16_from_bytes, u32_from_bytes},
-    Calculator,
-};
+use crate::util::{u16_from_bytes, u32_from_bytes};
 
 #[repr(u8)]
 #[derive(Debug, FromRepr)]
@@ -37,11 +35,32 @@ impl From<&[u8]> for Mode {
 }
 
 #[repr(u16)]
+#[derive(Debug, Clone, EnumDiscriminants)]
+#[strum_discriminants(name(VariableAttributeKind))]
+#[strum_discriminants(derive(FromRepr))]
 pub enum VariableAttribute {
-    Size = 1,
-    Kind = 2,
+    Size(u32) = 0x01,
+    Kind(u32) = 0x02,
+    Archived(bool) = 0x03,
+    AppVarSource(u32) = 0x05,
+    Version(u8) = 0x08,
+    Locked(bool) = 0x41,
 }
 
+impl VariableAttribute {
+    pub fn from_payload(kind: VariableAttributeKind, mut payload: &[u8]) -> anyhow::Result<Self> {
+        Ok(match kind {
+            VariableAttributeKind::Size => Self::Size(payload.read_u32::<BE>()?),
+            VariableAttributeKind::Kind => Self::Kind(payload.read_u32::<BE>()?),
+            VariableAttributeKind::Archived => Self::Archived(payload.read_u8()? == 1), // Guessing that 1 == true, need to verify
+            VariableAttributeKind::AppVarSource => Self::AppVarSource(payload.read_u32::<BE>()?),
+            VariableAttributeKind::Version => Self::Version(payload.read_u8()?),
+            VariableAttributeKind::Locked => Self::Locked(payload.read_u8()? == 1), // Also guessing here
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Variable {
     pub name: String,
     pub attributes: Vec<VariableAttribute>,
@@ -59,17 +78,34 @@ pub enum Screenshot {
 #[strum_discriminants(name(ParameterKind))]
 #[strum_discriminants(derive(FromRepr))]
 pub enum Parameter {
-    Name(String) = 0x02,
+    Name(String) = 0x0002,
+    TotalAppPages(u64) = 0x0012,
+    FreeAppPages(u64) = 0x0013,
     ScreenWidth(u16) = 0x001e,
     ScreenHeight(u16) = 0x001f,
     ScreenContents(Screenshot) = 0x0022,
     Clock(u32) = 0x25,
 }
 
+#[derive(Debug, Error)]
+#[error("invalid parameter payload received")]
+pub struct InvalidParameterPayload;
+
+impl From<io::Error> for InvalidParameterPayload {
+    fn from(_value: io::Error) -> Self {
+        Self // TODO properly convert the error to be more specific
+    }
+}
+
 impl Parameter {
-    pub fn from_payload(kind: ParameterKind, payload: &[u8]) -> Self {
-        match kind {
+    pub fn from_payload(
+        kind: ParameterKind,
+        mut payload: &[u8],
+    ) -> Result<Self, InvalidParameterPayload> {
+        Ok(match kind {
             ParameterKind::Name => Self::Name(String::from_utf8_lossy(payload).into_owned()),
+            ParameterKind::TotalAppPages => Self::TotalAppPages(payload.read_u64::<BE>()?),
+            ParameterKind::FreeAppPages => Self::FreeAppPages(payload.read_u64::<BE>()?),
             ParameterKind::ScreenWidth => Self::ScreenWidth(u16_from_bytes(&payload[0..2])),
             ParameterKind::ScreenHeight => Self::ScreenHeight(u16_from_bytes(&payload[0..2])),
             ParameterKind::ScreenContents => Self::ScreenContents(Screenshot::Rgb(Box::new({
@@ -77,7 +113,7 @@ impl Parameter {
                 a.try_into().unwrap()
             }))),
             ParameterKind::Clock => Self::Clock(u32_from_bytes(&payload[0..4])),
-        }
+        })
     }
 }
 
@@ -87,8 +123,4 @@ impl fmt::Display for UnknownParameterKindError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "unknown parameter kind {}", self.0)
     }
-}
-
-pub fn request_directory_listing(handle: &mut Calculator) -> anyhow::Result<()> {
-    todo!()
 }

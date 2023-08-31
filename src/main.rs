@@ -1,12 +1,15 @@
 #![allow(clippy::unusual_byte_groupings)]
 
 use std::{
+    fs,
     io::{self, Read},
+    path::Path,
+    thread,
     time::Duration,
 };
 
 use anyhow::Context;
-use dusb::Mode;
+use dusb::{Mode, Variable, VariableAttributeKind};
 use packet::raw::{self, RawPacket, RawPacketKind};
 use rusb::{Device, DeviceHandle, GlobalContext};
 
@@ -93,6 +96,37 @@ impl Calculator {
         })
     }
 
+    pub fn request_directory(
+        &mut self,
+        attributes: &[VariableAttributeKind],
+    ) -> anyhow::Result<Vec<Variable>> {
+        VirtualPacket::DirectoryRequest(attributes.to_vec()).send(self)?;
+
+        let mut variables = Vec::new();
+        loop {
+            let mut packet = VirtualPacket::receive(self)?;
+            if let VirtualPacket::Wait(ms) = packet {
+                println!("Waiting {ms}ms...");
+                thread::sleep(Duration::from_millis(100));
+                packet = VirtualPacket::receive(self)?;
+            }
+
+            match packet {
+                VirtualPacket::VariableHeader(variable) => {
+                    variables.push(variable);
+                }
+                VirtualPacket::EndOfTransmission => return Ok(variables),
+                packet => {
+                    return Err(vtl::WrongPacketKind {
+                        expected: VirtualPacketKind::VariableHeader,
+                        received: packet.into(),
+                    }
+                    .into())
+                }
+            }
+        }
+    }
+
     pub fn set_mode(&mut self, mode: Mode) -> anyhow::Result<()> {
         self.negotiate_packet_size(self.max_raw_packet_size)?;
 
@@ -138,9 +172,10 @@ impl Read for Calculator {
 
         if self.buffer.is_empty() {
             self.buffer.resize(1024, 0);
-            let bytes_read = match self
+            let bytes_read =
+                match self
                     .device
-                    .read_bulk(self.read_endpoint, &mut self.buffer, self.timeout) // Overflow
+                    .read_bulk(self.read_endpoint, &mut self.buffer, self.timeout)
                 {
                     Ok(bytes) => bytes,
                     Err(err) => return Err(io::Error::new(io::ErrorKind::Other, err)),
@@ -169,23 +204,10 @@ fn find_calculator() -> anyhow::Result<Option<Device<GlobalContext>>> {
     }))
 }
 
-fn main() -> anyhow::Result<()> {
-    let calculator = find_calculator()?
-        .with_context(|| "No calculator found")
-        .unwrap();
-    let descriptor = calculator.device_descriptor()?;
-    let mut handle = calculator.open()?;
-    println!(
-        "Product string: {}\nVersion: {}",
-        handle.read_product_string_ascii(&descriptor)?,
-        descriptor.device_version()
-    );
-
-    handle.claim_interface(0)?;
-
-    let mut calculator = Calculator::new(handle, Duration::from_secs(10))?;
-    calculator.set_mode(Mode::Normal)?;
-
+fn _take_screenshot<P>(calculator: &mut Calculator, output_path: P) -> anyhow::Result<()>
+where
+    P: AsRef<Path>,
+{
     let parameters = calculator.request_parameters(&[
         ParameterKind::ScreenWidth,
         ParameterKind::ScreenHeight,
@@ -219,6 +241,40 @@ fn main() -> anyhow::Result<()> {
             img.put_pixel(x, y, image::Rgb([r as u8, g as u8, b as u8]));
         }
     }
-    img.save("screenshot.png")?;
+    img.save(output_path)?;
+
+    Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
+    let calculator = find_calculator()?
+        .with_context(|| "No calculator found")
+        .unwrap();
+    let descriptor = calculator.device_descriptor()?;
+    let mut handle = calculator.open()?;
+    println!(
+        "Product string: {}\nVersion: {}",
+        handle.read_product_string_ascii(&descriptor)?,
+        descriptor.device_version()
+    );
+
+    handle.claim_interface(0)?;
+
+    let mut calculator = Calculator::new(handle, Duration::from_secs(10))?;
+    calculator.set_mode(Mode::Normal)?;
+    let variables = calculator.request_directory(&[
+        VariableAttributeKind::Size,
+        VariableAttributeKind::Kind,
+        VariableAttributeKind::Version,
+        VariableAttributeKind::Locked,
+        VariableAttributeKind::Archived,
+    ])?;
+
+    let mut s = String::new();
+    for variable in variables {
+        s.push_str(&format!("{variable:02x?}\n"));
+    }
+    fs::write("variables.txt", s)?;
+
     Ok(())
 }

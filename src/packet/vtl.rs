@@ -1,12 +1,15 @@
 use core::fmt;
 use std::io::{Cursor, Read};
 
-use byteorder::{BigEndian, ReadBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, BE};
 use strum::{EnumDiscriminants, FromRepr};
 use thiserror::Error;
 
 use crate::{
-    dusb::{Mode, Parameter, ParameterKind, UnknownParameterKindError},
+    dusb::{
+        Mode, Parameter, ParameterKind, UnknownParameterKindError, Variable, VariableAttribute,
+        VariableAttributeKind,
+    },
     util::{u16_from_bytes, u32_from_bytes},
     Calculator,
 };
@@ -21,7 +24,12 @@ pub enum VirtualPacket {
     SetMode(Mode) = 0x0001,
     ParameterRequest(Vec<ParameterKind>) = 0x0007,
     ParameterResponse(Vec<Parameter>) = 0x0008,
+    DirectoryRequest(Vec<VariableAttributeKind>) = 0x0009,
+    VariableHeader(Variable) = 0x000a,
+    //RequestVariable() = 0x000c,
     SetModeAcknowledge = 0x0012,
+    Wait(u32) = 0xbb00,
+    EndOfTransmission = 0xdd00,
 }
 
 impl VirtualPacket {
@@ -34,6 +42,17 @@ impl VirtualPacket {
                 for parameter in parameters {
                     payload.extend_from_slice(&(parameter as u16).to_be_bytes());
                 }
+
+                payload
+            }
+            Self::DirectoryRequest(attributes) => {
+                let mut payload = (attributes.len() as u32).to_be_bytes().to_vec();
+
+                for attribute in attributes {
+                    payload.extend_from_slice(&(attribute as u16).to_be_bytes());
+                }
+
+                payload.extend_from_slice(&[0, 1, 0, 1, 0, 1, 1]); // idk man
 
                 payload
             }
@@ -138,7 +157,7 @@ impl VirtualPacket {
         Self::from_payload(kind, &payload)
     }
 
-    pub fn from_payload(kind: VirtualPacketKind, payload: &[u8]) -> anyhow::Result<Self> {
+    pub fn from_payload(kind: VirtualPacketKind, mut payload: &[u8]) -> anyhow::Result<Self> {
         Ok(match kind {
             VirtualPacketKind::SetMode => Self::SetMode(Mode::from(&payload[0..2])),
             VirtualPacketKind::ParameterRequest => {
@@ -181,12 +200,44 @@ impl VirtualPacket {
                     payload_cursor.read_exact(&mut parameter_data)?;
 
                     let kind = ParameterKind::from_repr(id).ok_or(UnknownParameterKindError(id))?;
-                    parameters.push(Parameter::from_payload(kind, &parameter_data));
+                    parameters.push(Parameter::from_payload(kind, &parameter_data)?);
                 }
 
                 Self::ParameterResponse(parameters)
             }
+            VirtualPacketKind::VariableHeader => {
+                let mut payload = Cursor::new(payload);
+                let name_length = payload.read_u16::<BE>()?;
+                let mut name_bytes = vec![0; name_length as usize];
+                payload.read_exact(&mut name_bytes)?;
+                payload.read_u8()?; // 0x00
+                let attribute_count = payload.read_u16::<BE>()?;
+                let name = String::from_utf8_lossy(&name_bytes).into_owned();
+
+                let mut attributes = Vec::new();
+                for _ in 0..attribute_count {
+                    let id = payload.read_u16::<BE>()?;
+                    let is_valid = payload.read_u8()? == 0;
+
+                    if is_valid {
+                        let data_length = payload.read_u16::<BE>()?;
+
+                        let mut attribute_data = vec![0; data_length as usize];
+                        payload.read_exact(&mut attribute_data)?;
+
+                        attributes.push(VariableAttribute::from_payload(
+                            VariableAttributeKind::from_repr(id).unwrap(),
+                            &attribute_data,
+                        )?);
+                    }
+                }
+
+                Self::VariableHeader(Variable { name, attributes })
+            }
             VirtualPacketKind::SetModeAcknowledge => Self::SetModeAcknowledge,
+            VirtualPacketKind::Wait => Self::Wait(payload.read_u32::<BE>()?),
+            VirtualPacketKind::EndOfTransmission => Self::EndOfTransmission,
+            _ => todo!(),
         })
     }
 }
