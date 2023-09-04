@@ -1,7 +1,7 @@
 use core::fmt;
 use std::io::{Cursor, Read};
 
-use byteorder::{BigEndian, ReadBytesExt, BE};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt, BE};
 use strum::{EnumDiscriminants, FromRepr};
 use thiserror::Error;
 
@@ -26,10 +26,47 @@ pub enum VirtualPacket {
     ParameterResponse(Vec<Parameter>) = 0x0008,
     DirectoryRequest(Vec<VariableAttributeKind>) = 0x0009,
     VariableHeader(Variable) = 0x000a,
-    //RequestVariable() = 0x000c,
+    RequestVariable(String, Vec<VariableAttributeKind>, Vec<VariableAttribute>) = 0x000c,
+    VariableContents(Vec<u8>) = 0x000d,
     SetModeAcknowledge = 0x0012,
     Wait(u32) = 0xbb00,
     EndOfTransmission = 0xdd00,
+    Error(DeviceError) = 0xee00,
+}
+
+#[repr(u16)]
+#[derive(Debug, Error, FromRepr)]
+pub enum DeviceError {
+    #[error("invalid argument")]
+    InvalidArgument = 0x04,
+    #[error("can't delete app")]
+    AppDeleteFail = 0x06,
+    #[error("transmission error or invalid code")]
+    InvalidCode = 0x08,
+    #[error("tried to use basic mode while in boot mode")]
+    WrongMode = 0x09,
+    #[error("out of memory")]
+    OutOfMemory = 0x0c,
+    #[error("invalid folder name (?)")]
+    InvalidFolderName = 0x0d,
+    #[error("invalid name")]
+    InvalidName = 0x0e,
+    #[error("busy (sent after two keys, remote control?)")]
+    Busy = 0x11,
+    #[error("variable is locked or archived")]
+    VariableUnwritable = 0x12,
+    #[error("mode token was too small")]
+    ModeTooSmall = 0x1c,
+    #[error("mode token was too large")]
+    ModeTooLarge = 0x1d,
+    #[error("invalid parameter ID or invalid data")]
+    InvalidParameter = 0x22,
+    #[error("remote control (?)")]
+    RemoteControl = 0x29,
+    #[error("battery too low to transfer OS")]
+    BatteryLow = 0x2b,
+    #[error("handheld is busy (not at HOME)")]
+    HandheldBusy = 0x34,
 }
 
 impl VirtualPacket {
@@ -53,6 +90,32 @@ impl VirtualPacket {
                 }
 
                 payload.extend_from_slice(&[0, 1, 0, 1, 0, 1, 1]); // idk man
+
+                payload
+            }
+            Self::RequestVariable(name, requested_attributes, specified_attributes) => {
+                let mut payload = (name.len() as u16).to_be_bytes().to_vec();
+                payload.extend_from_slice(name.as_bytes());
+                payload.extend_from_slice(&[0, 1, 0xff, 0xff, 0xff, 0xff]); // "??????????" - Romain Liévin
+
+                payload.extend_from_slice(&(requested_attributes.len() as u16).to_be_bytes());
+                let attr_ids: Vec<u8> = requested_attributes
+                    .iter()
+                    .flat_map(|attr| (*attr as u16).to_be_bytes())
+                    .collect();
+                payload.extend_from_slice(&attr_ids);
+
+                payload.extend_from_slice(&(specified_attributes.len() as u16).to_be_bytes());
+                for attr in specified_attributes {
+                    payload.extend_from_slice(
+                        &(VariableAttributeKind::from(attr.clone()) as u16).to_be_bytes(),
+                    );
+                    let attr_payload = attr.into_payload();
+                    payload.extend_from_slice(&(attr_payload.len() as u16).to_be_bytes());
+                    payload.extend_from_slice(&attr_payload);
+                }
+
+                payload.extend_from_slice(&[0, 0]); // ???
 
                 payload
             }
@@ -234,9 +297,13 @@ impl VirtualPacket {
 
                 Self::VariableHeader(Variable { name, attributes })
             }
+            VirtualPacketKind::VariableContents => Self::VariableContents(payload.to_vec()),
             VirtualPacketKind::SetModeAcknowledge => Self::SetModeAcknowledge,
             VirtualPacketKind::Wait => Self::Wait(payload.read_u32::<BE>()?),
             VirtualPacketKind::EndOfTransmission => Self::EndOfTransmission,
+            VirtualPacketKind::Error => {
+                Self::Error(DeviceError::from_repr(payload.read_u16::<BE>()?).unwrap())
+            }
             _ => todo!(),
         })
     }
@@ -255,4 +322,13 @@ impl fmt::Display for UnknownPacketKindError {
 pub struct WrongPacketKind {
     pub expected: VirtualPacketKind,
     pub received: VirtualPacketKind,
+}
+
+impl WrongPacketKind {
+    pub fn new(expected: VirtualPacketKind, received: VirtualPacket) -> Self {
+        Self {
+            expected,
+            received: received.into(),
+        }
+    }
 }

@@ -9,12 +9,12 @@ use std::{
 };
 
 use anyhow::Context;
-use dusb::{Mode, Variable, VariableAttributeKind};
+use dusb::{Mode, Variable, VariableAttribute, VariableAttributeKind, VariableKind};
 use packet::raw::{self, RawPacket, RawPacketKind};
 use rusb::{Device, DeviceHandle, GlobalContext};
 
 use crate::{
-    dusb::{Parameter, ParameterKind, Screenshot},
+    dusb::{Parameter, ParameterKind, Screenshot, VariableContents},
     packet::vtl::{self, VirtualPacket, VirtualPacketKind},
 };
 
@@ -123,6 +123,53 @@ impl Calculator {
                     }
                     .into())
                 }
+            }
+        }
+    }
+
+    pub fn request_variable(&mut self, name: String) -> anyhow::Result<VariableContents> {
+        let packet = VirtualPacket::RequestVariable(
+            name,
+            vec![
+                VariableAttributeKind::Archived,
+                VariableAttributeKind::Version,
+                VariableAttributeKind::Size,
+                VariableAttributeKind::Kind,
+            ],
+            vec![VariableAttribute::Kind2(0xf00e001a)],
+        );
+        packet.send(self)?;
+
+        let kind = match VirtualPacket::receive(self)? {
+            VirtualPacket::VariableHeader(variable) => VariableKind::from_repr(
+                variable
+                    .attributes
+                    .iter()
+                    .find_map(|attr| {
+                        if let VariableAttribute::Kind(kind) = attr {
+                            Some(*kind)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap(),
+            )
+            .unwrap(),
+
+            VirtualPacket::Error(err) => return Err(err.into()),
+            packet => {
+                return Err(
+                    vtl::WrongPacketKind::new(VirtualPacketKind::VariableHeader, packet).into(),
+                );
+            }
+        };
+
+        match VirtualPacket::receive(self)? {
+            VirtualPacket::VariableContents(contents) => {
+                Ok(VariableContents::from_payload(kind, &contents)?)
+            }
+            packet => {
+                Err(vtl::WrongPacketKind::new(VirtualPacketKind::VariableContents, packet).into())
             }
         }
     }
@@ -262,19 +309,25 @@ fn main() -> anyhow::Result<()> {
 
     let mut calculator = Calculator::new(handle, Duration::from_secs(10))?;
     calculator.set_mode(Mode::Normal)?;
-    let variables = calculator.request_directory(&[
-        VariableAttributeKind::Size,
-        VariableAttributeKind::Kind,
-        VariableAttributeKind::Version,
-        VariableAttributeKind::Locked,
-        VariableAttributeKind::Archived,
-    ])?;
-
-    let mut s = String::new();
-    for variable in variables {
-        s.push_str(&format!("{variable:02x?}\n"));
+    let var = calculator.request_variable("Image1".to_owned())?;
+    match var {
+        VariableContents::Image(img) => fs::write("img.bin", img)?,
+        VariableContents::String(s) => fs::write("str.txt", s)?,
+        VariableContents::App(bytes) => fs::write("app.bin", bytes)?,
     }
-    fs::write("variables.txt", s)?;
+    // let variables = calculator.request_directory(&[
+    //     VariableAttributeKind::Size,
+    //     VariableAttributeKind::Kind,
+    //     VariableAttributeKind::Version,
+    //     VariableAttributeKind::Locked,
+    //     VariableAttributeKind::Archived,
+    // ])?;
+
+    // let mut s = String::new();
+    // for variable in variables {
+    //     s.push_str(&format!("{variable:02x?}\n"));
+    // }
+    // fs::write("variables.txt", s)?;
 
     Ok(())
 }

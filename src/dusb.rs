@@ -44,6 +44,7 @@ pub enum VariableAttribute {
     Archived(bool) = 0x03,
     AppVarSource(u32) = 0x05,
     Version(u8) = 0x08,
+    Kind2(u32) = 0x11,
     Locked(bool) = 0x41,
 }
 
@@ -55,8 +56,33 @@ impl VariableAttribute {
             VariableAttributeKind::Archived => Self::Archived(payload.read_u8()? == 1), // Guessing that 1 == true, need to verify
             VariableAttributeKind::AppVarSource => Self::AppVarSource(payload.read_u32::<BE>()?),
             VariableAttributeKind::Version => Self::Version(payload.read_u8()?),
+            VariableAttributeKind::Kind2 => Self::Kind2(payload.read_u32::<BE>()?),
             VariableAttributeKind::Locked => Self::Locked(payload.read_u8()? == 1), // Also guessing here
         })
+    }
+
+    pub fn into_payload(self) -> Vec<u8> {
+        match self {
+            Self::Size(size) => size.to_be_bytes().to_vec(),
+            Self::Kind(kind) => kind.to_be_bytes().to_vec(),
+            Self::Archived(archived) => {
+                if archived {
+                    vec![0; 1]
+                } else {
+                    vec![1; 1]
+                }
+            }
+            Self::AppVarSource(source) => source.to_be_bytes().to_vec(),
+            Self::Version(version) => version.to_be_bytes().to_vec(),
+            Self::Kind2(kind) => kind.to_be_bytes().to_vec(),
+            Self::Locked(locked) => {
+                if locked {
+                    vec![0; 1]
+                } else {
+                    vec![1; 1]
+                }
+            }
+        }
     }
 }
 
@@ -64,6 +90,30 @@ impl VariableAttribute {
 pub struct Variable {
     pub name: String,
     pub attributes: Vec<VariableAttribute>,
+}
+
+#[repr(u32)]
+#[derive(Debug, EnumDiscriminants)]
+#[strum_discriminants(name(VariableKind))]
+#[strum_discriminants(derive(FromRepr))]
+pub enum VariableContents {
+    Image(Vec<u8>) = 0xf00e001a,
+    String(String) = 0xf0070004,
+    App(Vec<u8>) = 0xf00f0024,
+}
+
+impl VariableContents {
+    pub fn from_payload(kind: VariableKind, mut payload: &[u8]) -> anyhow::Result<Self> {
+        Ok(match kind {
+            VariableKind::Image => Self::Image(payload.to_vec()),
+            VariableKind::String => {
+                let length = payload.read_u16::<LE>()?;
+                let str = String::from_utf8_lossy(&payload[..length as usize]);
+                Self::String(str.to_string())
+            }
+            VariableKind::App => Self::App(payload.to_vec()),
+        })
+    }
 }
 
 #[derive(Debug)]
