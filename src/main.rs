@@ -174,6 +174,26 @@ impl Calculator {
         }
     }
 
+    pub fn send_variable(
+        &mut self,
+        header: Variable,
+        contents: VariableContents,
+    ) -> anyhow::Result<()> {
+        VirtualPacket::RequestToSend(header).send(self)?;
+        VirtualPacket::VariableContents(contents.into_payload()).send(self)?;
+        match VirtualPacket::receive(self)? {
+            VirtualPacket::DataAcknowledge => {}
+            packet => {
+                return Err(
+                    vtl::WrongPacketKind::new(VirtualPacketKind::DataAcknowledge, packet).into(),
+                );
+            }
+        }
+        VirtualPacket::EndOfTransmission.send(self)?;
+
+        Ok(())
+    }
+
     pub fn set_mode(&mut self, mode: Mode) -> anyhow::Result<()> {
         self.negotiate_packet_size(self.max_raw_packet_size)?;
 
@@ -309,12 +329,29 @@ fn main() -> anyhow::Result<()> {
 
     let mut calculator = Calculator::new(handle, Duration::from_secs(10))?;
     calculator.set_mode(Mode::Normal)?;
-    let var = calculator.request_variable("Image1".to_owned())?;
-    match var {
-        VariableContents::Image(img) => fs::write("img.bin", img)?,
-        VariableContents::String(s) => fs::write("str.txt", s)?,
-        VariableContents::App(bytes) => fs::write("app.bin", bytes)?,
-    }
+
+    let str = String::from("Test");
+    calculator.send_variable(
+        Variable {
+            name: String::from("Str1"),
+            attributes: vec![
+                VariableAttribute::Size(str.len() as u32),
+                VariableAttribute::Kind(0xf0070004),
+                VariableAttribute::Version(0),
+                VariableAttribute::Archived(false),
+                VariableAttribute::Locked(false),
+            ],
+        },
+        VariableContents::String(str),
+    )?;
+
+    // let var = calculator.request_variable("Str1".to_owned())?;
+    // match var {
+    //     VariableContents::Image(img) => fs::write("img.bin", img)?,
+    //     VariableContents::String(s) => fs::write("str.txt", s)?,
+    //     VariableContents::App(bytes) => fs::write("app.bin", bytes)?,
+    // }
+
     // let variables = calculator.request_directory(&[
     //     VariableAttributeKind::Size,
     //     VariableAttributeKind::Kind,
@@ -322,7 +359,6 @@ fn main() -> anyhow::Result<()> {
     //     VariableAttributeKind::Locked,
     //     VariableAttributeKind::Archived,
     // ])?;
-
     // let mut s = String::new();
     // for variable in variables {
     //     s.push_str(&format!("{variable:02x?}\n"));

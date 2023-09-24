@@ -1,14 +1,14 @@
 use core::fmt;
 use std::io::{Cursor, Read};
 
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt, BE};
+use byteorder::{BigEndian, ReadBytesExt, BE};
 use strum::{EnumDiscriminants, FromRepr};
 use thiserror::Error;
 
 use crate::{
     dusb::{
         Mode, Parameter, ParameterKind, UnknownParameterKindError, Variable, VariableAttribute,
-        VariableAttributeKind,
+        VariableAttributeKind, VariableContents,
     },
     util::{u16_from_bytes, u32_from_bytes},
     Calculator,
@@ -26,9 +26,11 @@ pub enum VirtualPacket {
     ParameterResponse(Vec<Parameter>) = 0x0008,
     DirectoryRequest(Vec<VariableAttributeKind>) = 0x0009,
     VariableHeader(Variable) = 0x000a,
+    RequestToSend(Variable) = 0x000b,
     RequestVariable(String, Vec<VariableAttributeKind>, Vec<VariableAttribute>) = 0x000c,
     VariableContents(Vec<u8>) = 0x000d,
     SetModeAcknowledge = 0x0012,
+    DataAcknowledge = 0xaa00,
     Wait(u32) = 0xbb00,
     EndOfTransmission = 0xdd00,
     Error(DeviceError) = 0xee00,
@@ -69,11 +71,11 @@ pub enum DeviceError {
     HandheldBusy = 0x34,
 }
 
-impl VirtualPacket {
-    pub fn into_payload(self) -> Vec<u8> {
-        match self {
-            Self::SetMode(mode) => mode.into(),
-            Self::ParameterRequest(parameters) => {
+impl From<VirtualPacket> for Vec<u8> {
+    fn from(packet: VirtualPacket) -> Vec<u8> {
+        match packet {
+            VirtualPacket::SetMode(mode) => mode.into(),
+            VirtualPacket::ParameterRequest(parameters) => {
                 let mut payload = (parameters.len() as u16).to_be_bytes().to_vec();
 
                 for parameter in parameters {
@@ -82,7 +84,7 @@ impl VirtualPacket {
 
                 payload
             }
-            Self::DirectoryRequest(attributes) => {
+            VirtualPacket::DirectoryRequest(attributes) => {
                 let mut payload = (attributes.len() as u32).to_be_bytes().to_vec();
 
                 for attribute in attributes {
@@ -93,7 +95,7 @@ impl VirtualPacket {
 
                 payload
             }
-            Self::RequestVariable(name, requested_attributes, specified_attributes) => {
+            VirtualPacket::RequestVariable(name, requested_attributes, specified_attributes) => {
                 let mut payload = (name.len() as u16).to_be_bytes().to_vec();
                 payload.extend_from_slice(name.as_bytes());
                 payload.extend_from_slice(&[0, 1, 0xff, 0xff, 0xff, 0xff]); // "??????????" - Romain Liévin
@@ -119,13 +121,32 @@ impl VirtualPacket {
 
                 payload
             }
-            _ => todo!(),
+            VirtualPacket::RequestToSend(variable) => {
+                let mut payload = (variable.name.len() as u16).to_be_bytes().to_vec();
+                payload.extend_from_slice(variable.name.as_bytes());
+
+                payload.extend_from_slice(&(variable.attributes.len() as u16).to_be_bytes());
+                for attribute in variable.attributes {
+                    let kind: VariableAttributeKind = (&attribute).into();
+                    payload.extend_from_slice(&(kind as u16).to_be_bytes());
+                    let bytes = attribute.into_payload();
+                    payload.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+                    payload.extend_from_slice(&bytes);
+                }
+
+                payload
+            }
+            VirtualPacket::VariableContents(variable) => variable,
+            VirtualPacket::EndOfTransmission => Vec::new(),
+            packet => todo!("tried to send unhandled packet kind {packet:?}"),
         }
     }
+}
 
+impl VirtualPacket {
     pub fn into_raw_packets(self, max_size: u32) -> Vec<RawPacket> {
         let kind = VirtualPacketKind::from(&self);
-        let contents = self.into_payload();
+        let contents: Vec<u8> = self.into();
 
         let mut bytes = (contents.len() as u32).to_be_bytes().to_vec();
         bytes.extend_from_slice(&(kind as u16).to_be_bytes());
@@ -299,12 +320,15 @@ impl VirtualPacket {
             }
             VirtualPacketKind::VariableContents => Self::VariableContents(payload.to_vec()),
             VirtualPacketKind::SetModeAcknowledge => Self::SetModeAcknowledge,
+            VirtualPacketKind::DataAcknowledge => Self::DataAcknowledge,
             VirtualPacketKind::Wait => Self::Wait(payload.read_u32::<BE>()?),
             VirtualPacketKind::EndOfTransmission => Self::EndOfTransmission,
             VirtualPacketKind::Error => {
                 Self::Error(DeviceError::from_repr(payload.read_u16::<BE>()?).unwrap())
             }
-            _ => todo!(),
+            kind => {
+                todo!("received unhandled packet kind {:?}", kind)
+            }
         })
     }
 }

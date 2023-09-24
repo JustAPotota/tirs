@@ -114,6 +114,17 @@ impl VariableContents {
             VariableKind::App => Self::App(payload.to_vec()),
         })
     }
+
+    pub fn into_payload(self) -> Vec<u8> {
+        match self {
+            Self::String(str) => {
+                let mut payload = (str.len() as u16).to_le_bytes().to_vec();
+                payload.extend_from_slice(str.as_bytes());
+                payload
+            }
+            _ => todo!(),
+        }
+    }
 }
 
 #[derive(Debug)]
